@@ -47,3 +47,10 @@ logs/
 # Temporary files
 temp/
 *.tmp
+
+
+wip-manager-google-credentials.json
+
+credentials/
+*.json
+.env

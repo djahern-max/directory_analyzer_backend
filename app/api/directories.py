@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import JSONResponse
 import logging
+import traceback
 from typing import Dict, Any
 
 from app.models.directory import (
@@ -9,11 +10,11 @@ from app.models.directory import (
     QuickIdentificationResponse
 )
 from app.models.responses import DirectoryAnalysisResponse
-from app.api.deps import get_api_key
 from app.services.directory_scanner import directory_scanner
 from app.services.contract_intelligence import create_contract_intelligence_service
 from app.utils.validation import validate_analysis_request
 from app.core.exceptions import DirectoryAnalyzerException
+from app.config import settings
 
 router = APIRouter()
 logger = logging.getLogger("app.api.directories")
@@ -21,26 +22,12 @@ logger = logging.getLogger("app.api.directories")
 
 @router.post("/list", response_model=DirectoryListResponse)
 async def list_directory_files(
-    request: DirectoryAnalysisRequest,
-    api_key: str = Depends(get_api_key)
+    request: DirectoryAnalysisRequest
 ) -> DirectoryListResponse:
-    """
-    List PDF files in a directory for preview before analysis
-    
-    Args:
-        request: Directory analysis request
-        api_key: Validated API key
-        
-    Returns:
-        Directory listing with file information
-        
-    Raises:
-        HTTPException: If directory listing fails
-    """
+    """List PDF files in a directory for preview before analysis"""
     logger.info(f"Listing files in directory: {request.directory_path}")
     
     try:
-        # Validate request
         validation = validate_analysis_request(request.dict())
         if not validation["is_valid"]:
             raise HTTPException(
@@ -48,7 +35,6 @@ async def list_directory_files(
                 detail=f"Invalid request: {'; '.join(validation['errors'])}"
             )
         
-        # Scan directory
         scan_result = directory_scanner.scan_directory(request.directory_path)
         
         response = DirectoryListResponse(
@@ -82,42 +68,23 @@ async def list_directory_files(
         )
     except Exception as e:
         logger.error(f"Unexpected error listing directory: {e}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list directory files: {str(e)}"
         )
 
 
-@router.post("/analyze", response_model=DirectoryAnalysisResponse)
+@router.post("/analyze")
 async def analyze_directory(
-    request: DirectoryAnalysisRequest,
-    api_key: str = Depends(get_api_key)
-) -> DirectoryAnalysisResponse:
-    """
-    Analyze all PDFs in a directory to identify main contract and classify documents
-    
-    This endpoint:
-    1. Scans directory for PDF files
-    2. Extracts text from each PDF
-    3. Uses AI to classify each document
-    4. Identifies the main contract
-    5. Ranks all documents by importance
-    6. Returns comprehensive analysis
-    
-    Args:
-        request: Directory analysis request
-        api_key: Validated API key
-        
-    Returns:
-        Complete directory analysis results
-        
-    Raises:
-        HTTPException: If analysis fails
-    """
+    request: DirectoryAnalysisRequest
+) -> Dict[str, Any]:  # Return raw dict instead of trying to fit into model
+    """Analyze all PDFs in a directory"""
     logger.info(f"Starting complete directory analysis: {request.directory_path}")
     
     try:
-        # Validate request
+        api_key = settings.anthropic_api_key
+        
         validation = validate_analysis_request(request.dict())
         if not validation["is_valid"]:
             raise HTTPException(
@@ -125,54 +92,29 @@ async def analyze_directory(
                 detail=f"Invalid request: {'; '.join(validation['errors'])}"
             )
         
-        # Create intelligence service
         intelligence_service = create_contract_intelligence_service(api_key)
-        
-        # Run complete analysis
         analysis_result = intelligence_service.analyze_directory_complete(
             request.directory_path
         )
         
-        # Convert to response model
-        response = DirectoryAnalysisResponse(
-            success=analysis_result["success"],
-            message=analysis_result["message"],
-            job_info=analysis_result["job_info"],
-            main_contract=analysis_result["main_contract"],
-            ranked_documents=analysis_result["ranked_documents"],
-            stats=analysis_result["stats"],
-            classification_summary=analysis_result["classification_summary"],
-            failed_files=analysis_result["failed_files"],
-            timestamp=analysis_result["timestamp"]
-        )
-        
+        # Return the result directly as a dict, don't try to convert to Pydantic model
         logger.info(
             f"Directory analysis completed successfully. "
-            f"Main contract: {response.main_contract.filename if response.main_contract else 'Not identified'}"
+            f"Main contract: {analysis_result.get('main_contract', {}).get('filename', 'Not identified')}"
         )
         
-        return response
+        return analysis_result
         
     except DirectoryAnalyzerException as e:
         logger.error(f"Directory analysis failed: {e.message}")
-        
-        # Return appropriate HTTP status based on error type
-        if "not found" in e.message.lower():
-            status_code = status.HTTP_404_NOT_FOUND
-        elif "permission" in e.message.lower():
-            status_code = status.HTTP_403_FORBIDDEN
-        elif "overloaded" in e.message.lower() or "rate limited" in e.message.lower():
-            status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        else:
-            status_code = status.HTTP_400_BAD_REQUEST
-        
         raise HTTPException(
-            status_code=status_code,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=e.message
         )
         
     except Exception as e:
         logger.error(f"Unexpected error in directory analysis: {e}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Directory analysis failed: {str(e)}"
@@ -181,26 +123,14 @@ async def analyze_directory(
 
 @router.post("/identify-main-contract", response_model=QuickIdentificationResponse)
 async def identify_main_contract_only(
-    request: DirectoryAnalysisRequest,
-    api_key: str = Depends(get_api_key)
+    request: DirectoryAnalysisRequest
 ) -> QuickIdentificationResponse:
-    """
-    Quick endpoint to identify just the main contract from a directory
-    
-    Args:
-        request: Directory analysis request
-        api_key: Validated API key
-        
-    Returns:
-        Main contract identification results
-        
-    Raises:
-        HTTPException: If identification fails
-    """
+    """Quick endpoint to identify just the main contract"""
     logger.info(f"Identifying main contract in: {request.directory_path}")
     
     try:
-        # Validate request
+        api_key = settings.anthropic_api_key
+        
         validation = validate_analysis_request(request.dict())
         if not validation["is_valid"]:
             raise HTTPException(
@@ -208,10 +138,7 @@ async def identify_main_contract_only(
                 detail=f"Invalid request: {'; '.join(validation['errors'])}"
             )
         
-        # Create intelligence service
         intelligence_service = create_contract_intelligence_service(api_key)
-        
-        # Run main contract identification
         identification_result = intelligence_service.identify_main_contract_only(
             request.directory_path
         )
@@ -234,6 +161,7 @@ async def identify_main_contract_only(
         
     except Exception as e:
         logger.error(f"Unexpected error in main contract identification: {e}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Main contract identification failed: {str(e)}"
@@ -241,19 +169,10 @@ async def identify_main_contract_only(
 
 
 @router.get("/service-status")
-async def get_service_status(
-    api_key: str = Depends(get_api_key)
-) -> Dict[str, Any]:
-    """
-    Get status of the directory analysis service
-    
-    Args:
-        api_key: Validated API key
-        
-    Returns:
-        Service status information
-    """
+async def get_service_status() -> Dict[str, Any]:
+    """Get status of the directory analysis service"""
     try:
+        api_key = settings.anthropic_api_key
         intelligence_service = create_contract_intelligence_service(api_key)
         status_info = intelligence_service.get_service_status()
         
@@ -265,6 +184,7 @@ async def get_service_status(
         
     except Exception as e:
         logger.error(f"Error getting service status: {e}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
         return {
             "status": "error",
             "timestamp": __import__('datetime').datetime.utcnow().isoformat(),

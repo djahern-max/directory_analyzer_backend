@@ -66,9 +66,20 @@ class DocumentAnalyzer:
        filename = classification.get("filename", "").lower()
        
        # Strong indicators of main/final contract
-       main_indicators = ["executed", "signed", "final", "fully executed"]
-       if any(indicator in filename for indicator in main_indicators):
-           score += 25
+       filename = classification.get("filename", "").lower()
+       
+       # CRITICAL: "Executed" is the strongest possible indicator
+       if "executed" in filename:
+           score += 100  # Massive boost for executed contracts
+           self.logger.info(f"EXECUTED contract found: {filename} (+100 points)")
+       
+       # Other strong indicators of main/final contract
+       elif "fully executed" in filename:
+           score += 90
+       elif "signed" in filename and "executed" not in filename:
+           score += 40  # Signed but not executed (lower than executed)
+       elif "final" in filename:
+           score += 35
        
        # Clean/final version indicators
        clean_indicators = ["clean", "final copy", "executed copy"]
