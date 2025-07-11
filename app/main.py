@@ -29,6 +29,7 @@ def create_application() -> FastAPI:
         version="1.0.0",
         debug=settings.debug,
         lifespan=lifespan,
+        openapi_version="3.1.0"  # Add this line
     )
 
     # Setup middleware
@@ -38,11 +39,9 @@ def create_application() -> FastAPI:
     setup_exception_handlers(app)
 
     # Include routers
-
     app.include_router(directories.router, prefix="/directories", tags=["directories"])
 
     return app
-
 
 # Create the app instance
 app = create_application()
