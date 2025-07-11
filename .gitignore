@@ -54,3 +54,5 @@ wip-manager-google-credentials.json
 credentials/
 *.json
 .env
+
+notes.txt
