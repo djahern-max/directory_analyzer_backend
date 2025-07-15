@@ -1,7 +1,9 @@
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import RedirectResponse
+from sqlalchemy.orm import Session
 import httpx
 import jwt
+import logging
 from datetime import datetime, timedelta
 
 from app.config import settings
@@ -9,6 +11,7 @@ from app.models.database import User
 from app.core.database import get_db
 
 router = APIRouter()
+logger = logging.getLogger("app.api.auth")
 
 
 @router.get("/google")
@@ -26,57 +29,143 @@ async def google_login():
 
 
 @router.get("/google/callback")
-async def google_callback(code: str, db=Depends(get_db)):
+async def google_callback(code: str, db: Session = Depends(get_db)):
     """Handle Google OAuth callback"""
 
-    # Exchange code for tokens
-    token_url = "https://oauth2.googleapis.com/token"
-    token_data = {
-        "client_id": settings.google_oauth_client_id,
-        "client_secret": settings.google_oauth_client_secret,
-        "code": code,
-        "grant_type": "authorization_code",
-        "redirect_uri": settings.google_oauth_redirect_uri,
-    }
+    try:
+        # Exchange code for tokens
+        token_url = "https://oauth2.googleapis.com/token"
+        token_data = {
+            "client_id": settings.google_oauth_client_id,
+            "client_secret": settings.google_oauth_client_secret,
+            "code": code,
+            "grant_type": "authorization_code",
+            "redirect_uri": settings.google_oauth_redirect_uri,
+        }
 
-    async with httpx.AsyncClient() as client:
-        token_response = await client.post(token_url, data=token_data)
-        tokens = token_response.json()
-
-        # Get user info
-        user_info_response = await client.get(
-            "https://www.googleapis.com/oauth2/v2/userinfo",
-            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        logger.info(
+            f"Requesting tokens with redirect_uri: {settings.google_oauth_redirect_uri}"
         )
-        user_info = user_info_response.json()
 
-    # Create or update user
-    user = db.query(User).filter(User.email == user_info["email"]).first()
-    if not user:
-        user = User(
-            email=user_info["email"],
-            google_id=user_info["id"],
-            name=user_info["name"],
-            picture_url=user_info.get("picture"),
-            credits_remaining=settings.free_trial_credits,
+        async with httpx.AsyncClient() as client:
+            token_response = await client.post(token_url, data=token_data)
+            tokens = token_response.json()
+
+            # Log the response for debugging
+            logger.info(f"Google token response status: {token_response.status_code}")
+            logger.info(f"Google token response: {tokens}")
+
+            # Check for errors in the response
+            if "error" in tokens:
+                error_msg = tokens.get(
+                    "error_description", tokens.get("error", "Unknown error")
+                )
+                logger.error(f"Google OAuth error: {error_msg}")
+                raise HTTPException(
+                    status_code=400, detail=f"Google OAuth error: {error_msg}"
+                )
+
+            # Check if access_token exists
+            if "access_token" not in tokens:
+                logger.error(
+                    f"No access_token in Google response. Full response: {tokens}"
+                )
+                raise HTTPException(
+                    status_code=400, detail="Failed to get access token from Google"
+                )
+
+            # Get user info
+            user_info_response = await client.get(
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+                headers={"Authorization": f"Bearer {tokens['access_token']}"},
+            )
+
+            if user_info_response.status_code != 200:
+                logger.error(
+                    f"Failed to get user info: {user_info_response.status_code} - {user_info_response.text}"
+                )
+                raise HTTPException(
+                    status_code=400, detail="Failed to get user info from Google"
+                )
+
+            user_info = user_info_response.json()
+            logger.info(f"Got user info for: {user_info.get('email')}")
+
+        # Create or update user
+        user = db.query(User).filter(User.email == user_info["email"]).first()
+        if not user:
+            user = User(
+                email=user_info["email"],
+                google_id=user_info["id"],
+                name=user_info["name"],
+                picture_url=user_info.get("picture"),
+                credits_remaining=settings.free_trial_credits,
+            )
+            db.add(user)
+            logger.info(f"Created new user: {user_info['email']}")
+        else:
+            user.last_login = datetime.utcnow()
+            logger.info(f"Updated existing user: {user_info['email']}")
+
+        db.commit()
+
+        # Create JWT token
+        token_data = {"user_id": str(user.id), "email": user.email}
+        token = jwt.encode(
+            {
+                **token_data,
+                "exp": datetime.utcnow()
+                + timedelta(minutes=settings.jwt_expire_minutes),
+            },
+            settings.jwt_secret_key,
+            algorithm=settings.jwt_algorithm,
         )
-        db.add(user)
-    else:
-        user.last_login = datetime.utcnow()
 
-    db.commit()
+        # Redirect to frontend with token
+        frontend_url = f"https://pdfcontractanalyzer.com/?token={token}"
+        logger.info(
+            f"Redirecting to frontend with token for user: {user_info['email']}"
+        )
+        return RedirectResponse(url=frontend_url)
 
-    # Create JWT token
-    token_data = {"user_id": str(user.id), "email": user.email}
-    token = jwt.encode(
-        {
-            **token_data,
-            "exp": datetime.utcnow() + timedelta(minutes=settings.jwt_expire_minutes),
-        },
-        settings.jwt_secret_key,
-        algorithm=settings.jwt_algorithm,
-    )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in Google callback: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Authentication failed: {str(e)}")
 
-    # Redirect to frontend with token
-    frontend_url = f"https://pdfcontractanalyzer.com/?token={token}"
-    return RedirectResponse(url=frontend_url)
+
+@router.get("/me")
+async def get_current_user(request: Request, db: Session = Depends(get_db)):
+    """Get current user info"""
+    try:
+        # Extract token from Authorization header
+        authorization = request.headers.get("Authorization")
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(
+                status_code=401, detail="Missing or invalid authorization header"
+            )
+
+        token = authorization.split(" ")[1]
+
+        payload = jwt.decode(
+            token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
+        )
+        user_id = payload.get("user_id")
+        user = db.query(User).filter(User.id == user_id).first()
+
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        return {
+            "id": str(user.id),
+            "email": user.email,
+            "name": user.name,
+            "picture_url": user.picture_url,
+            "credits_remaining": float(user.credits_remaining),
+            "is_active": user.is_active,
+        }
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
