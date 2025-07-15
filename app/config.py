@@ -58,6 +58,21 @@ class Settings(BaseSettings):
     estimated_cost_per_document: float = 0.02
     estimated_time_per_document: float = 2.0
 
+    # Billing settings
+    anthropic_markup_multiplier: float = 2.0
+    minimum_charge: float = 0.01
+    free_trial_credits: float = 1.00
+
+    # Google OAuth
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    google_oauth_redirect_uri: str = ""
+
+    # JWT
+    jwt_secret_key: str = ""
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 1440
+
     # Logging
     log_level: str = "INFO"
     log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

@@ -1,12 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 
 from app.config import settings
 from app.core.logging import setup_logging
 from app.core.exceptions import setup_exception_handlers
-from app.api import directories
+from app.api import directories, auth  # Add auth import
 from app.api.middleware import setup_middleware
 
 
@@ -29,7 +28,7 @@ def create_application() -> FastAPI:
         version="1.0.0",
         debug=settings.debug,
         lifespan=lifespan,
-        openapi_version="3.1.0"  # Add this line
+        openapi_version="3.1.0",
     )
 
     # Setup middleware
@@ -40,8 +39,12 @@ def create_application() -> FastAPI:
 
     # Include routers
     app.include_router(directories.router, prefix="/directories", tags=["directories"])
+    app.include_router(
+        auth.router, prefix="/auth", tags=["authentication"]
+    )  # Add this line
 
     return app
+
 
 # Create the app instance
 app = create_application()
@@ -57,6 +60,7 @@ async def root():
         "endpoints": {
             "health": "/health",
             "directories": "/directories",
+            "auth": "/auth",  # Add this
             "docs": "/docs",
             "redoc": "/redoc",
         },
