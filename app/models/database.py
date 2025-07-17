@@ -40,6 +40,23 @@ class User(Base):
     analysis_sessions = relationship("AnalysisSession", back_populates="user")
     usage_records = relationship("UsageRecord", back_populates="user")
 
+    # Stripe subscription fields
+    stripe_customer_id = Column(String(255), nullable=True, index=True)
+    has_premium = Column(Boolean, default=False, nullable=False)
+    subscription_status = Column(
+        String(50), default="free", nullable=False
+    )  # free, active, cancelled, past_due, trialing
+
+    # Subscription timing
+    subscription_start_date = Column(DateTime(timezone=True), nullable=True)
+    subscription_end_date = Column(DateTime(timezone=True), nullable=True)
+    current_period_start = Column(DateTime(timezone=True), nullable=True)
+    current_period_end = Column(DateTime(timezone=True), nullable=True)
+
+    # Stripe IDs for reference
+    stripe_subscription_id = Column(String(255), nullable=True, index=True)
+    # ===== END STRIPE FIELDS =====
+
 
 class UsageRecord(Base):
     __tablename__ = "usage_records"

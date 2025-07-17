@@ -14,6 +14,21 @@ router = APIRouter()
 logger = logging.getLogger("app.api.auth")
 
 
+def is_premium_user(email: str, db: Session) -> bool:
+    """Check if user has premium subscription from database"""
+    user = db.query(User).filter(User.email == email).first()
+    if user:
+        # Check if user has active premium subscription
+        return user.has_premium and user.subscription_status == "active"
+
+    # Fallback to test users if not in database yet
+    premium_test_users = [
+        "danielaherniv@gmail.com",  # Your email
+        # Add more emails here for testing
+    ]
+    return email.lower() in premium_test_users
+
+
 @router.get("/google")
 async def google_login():
     """Redirect to Google OAuth"""
@@ -100,6 +115,9 @@ async def google_callback(code: str, db: Session = Depends(get_db)):
                 name=user_info["name"],
                 picture_url=user_info.get("picture"),
                 credits_remaining=settings.free_trial_credits,
+                # Initialize Stripe fields
+                has_premium=False,
+                subscription_status="free",
             )
             db.add(user)
             logger.info(f"Created new user: {user_info['email']}")
@@ -109,14 +127,23 @@ async def google_callback(code: str, db: Session = Depends(get_db)):
 
         db.commit()
 
-        # Create JWT token
-        token_data = {"user_id": str(user.id), "email": user.email}
+        # Check premium status from database
+        has_premium = is_premium_user(user.email, db)
+        logger.info(f"User {user.email} premium status: {has_premium}")
+
+        # Create JWT token with premium information
+        token_data = {
+            "user_id": str(user.id),
+            "email": user.email,
+            "has_premium": has_premium,
+            "subscription_status": (
+                user.subscription_status if user.subscription_status else "free"
+            ),
+            "exp": datetime.utcnow() + timedelta(minutes=settings.jwt_expire_minutes),
+        }
+
         token = jwt.encode(
-            {
-                **token_data,
-                "exp": datetime.utcnow()
-                + timedelta(minutes=settings.jwt_expire_minutes),
-            },
+            token_data,
             settings.jwt_secret_key,
             algorithm=settings.jwt_algorithm,
         )
@@ -124,7 +151,7 @@ async def google_callback(code: str, db: Session = Depends(get_db)):
         # Redirect to frontend with token
         frontend_url = f"https://pdfcontractanalyzer.com/?token={token}"
         logger.info(
-            f"Redirecting to frontend with token for user: {user_info['email']}"
+            f"Redirecting to frontend with token for user: {user_info['email']} (premium: {has_premium})"
         )
         return RedirectResponse(url=frontend_url)
 
@@ -157,6 +184,7 @@ async def get_current_user(request: Request, db: Session = Depends(get_db)):
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
 
+        # Return user info including current premium status from database
         return {
             "id": str(user.id),
             "email": user.email,
@@ -164,6 +192,19 @@ async def get_current_user(request: Request, db: Session = Depends(get_db)):
             "picture_url": user.picture_url,
             "credits_remaining": float(user.credits_remaining),
             "is_active": user.is_active,
+            "has_premium": user.has_premium,
+            "subscription_status": user.subscription_status or "free",
+            "stripe_customer_id": user.stripe_customer_id,
+            "subscription_start_date": (
+                user.subscription_start_date.isoformat()
+                if user.subscription_start_date
+                else None
+            ),
+            "subscription_end_date": (
+                user.subscription_end_date.isoformat()
+                if user.subscription_end_date
+                else None
+            ),
         }
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")

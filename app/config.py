@@ -1,6 +1,7 @@
 from pydantic_settings import BaseSettings
 from typing import Optional, List
 import os
+from dotenv import load_dotenv
 
 
 class Settings(BaseSettings):
@@ -49,6 +50,11 @@ class Settings(BaseSettings):
 
     # RunPod Configuration
     runpod_endpoint: str = ""
+
+    # FIXED: Stripe Settings with proper type annotations
+    stripe_publishable_key: str = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+    stripe_secret_key: str = os.getenv("STRIPE_SECRET_KEY", "")
+    stripe_webhook_secret: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 
     # Encryption Settings
     encryption_key: str = ""
@@ -168,6 +174,15 @@ class Settings(BaseSettings):
             "credentials_path": self.google_cloud_credentials_path,
             "application_credentials": self.google_application_credentials,
             "use_vision_ocr": self.use_google_vision_ocr,
+        }
+
+    @property
+    def stripe_config(self) -> dict:
+        """Get Stripe configuration"""
+        return {
+            "publishable_key": self.stripe_publishable_key,
+            "secret_key": self.stripe_secret_key,
+            "webhook_secret": self.stripe_webhook_secret,
         }
 
 
