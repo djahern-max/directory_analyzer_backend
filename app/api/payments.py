@@ -450,6 +450,9 @@ async def get_stripe_config():
     return {"publishable_key": settings.stripe_publishable_key}
 
 
+# Replace the verify_payment_session function in app/api/payments.py
+
+
 @router.post("/verify-session")
 async def verify_payment_session(
     request: dict,
@@ -485,16 +488,40 @@ async def verify_payment_session(
                 user.subscription_status = "active"
                 user.subscription_start_date = datetime.utcnow()
 
-                # If there's a subscription, get more details
+                # If there's a subscription, get more details with error handling
                 if session.subscription:
-                    subscription = stripe.Subscription.retrieve(session.subscription)
-                    user.stripe_subscription_id = subscription.id
-                    user.current_period_start = datetime.fromtimestamp(
-                        subscription.current_period_start
-                    )
-                    user.current_period_end = datetime.fromtimestamp(
-                        subscription.current_period_end
-                    )
+                    try:
+                        subscription = stripe.Subscription.retrieve(
+                            session.subscription
+                        )
+                        user.stripe_subscription_id = subscription.id
+
+                        # Safe access to current_period_start and current_period_end
+                        if (
+                            hasattr(subscription, "current_period_start")
+                            and subscription.current_period_start
+                        ):
+                            user.current_period_start = datetime.fromtimestamp(
+                                subscription.current_period_start
+                            )
+
+                        if (
+                            hasattr(subscription, "current_period_end")
+                            and subscription.current_period_end
+                        ):
+                            user.current_period_end = datetime.fromtimestamp(
+                                subscription.current_period_end
+                            )
+
+                        logger.info(
+                            f"Updated subscription details for user {user.email}"
+                        )
+
+                    except Exception as sub_error:
+                        logger.warning(
+                            f"Could not retrieve subscription details: {sub_error}"
+                        )
+                        # Continue without subscription details
 
                 db.commit()
 
