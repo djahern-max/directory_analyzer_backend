@@ -1,4 +1,4 @@
-# app/api/payments.py - Enhanced debug version
+# app/api/payments.py - Complete file with all endpoints and handlers
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import RedirectResponse
 import stripe
@@ -12,7 +12,7 @@ from app.models.database import User
 from app.core.database import get_db
 from app.middleware.premium_check import get_current_user
 
-# Configure Stripe - Fix the attribute access
+# Configure Stripe
 stripe.api_key = settings.stripe_secret_key
 
 router = APIRouter()
@@ -126,330 +126,6 @@ async def create_checkout_session(
         raise HTTPException(status_code=500, detail=f"Payment setup failed: {str(e)}")
 
 
-# Test endpoint to validate Stripe configuration
-@router.get("/test-stripe-config")
-async def test_stripe_config():
-    """Test endpoint to validate Stripe configuration"""
-    try:
-        logger.info("Testing Stripe configuration...")
-
-        # Check if API key is set
-        if not settings.stripe_secret_key:
-            return {
-                "success": False,
-                "error": "No Stripe secret key configured",
-                "stripe_key_set": False,
-            }
-
-        if settings.stripe_secret_key.startswith("your_"):
-            return {
-                "success": False,
-                "error": "Stripe secret key appears to be placeholder",
-                "stripe_key_set": True,
-                "stripe_key_preview": settings.stripe_secret_key[:20] + "...",
-            }
-
-        # Try a simple Stripe API call
-        try:
-            # List products (should work with any valid key)
-            products = stripe.Product.list(limit=1)
-
-            return {
-                "success": True,
-                "message": "Stripe configuration is valid",
-                "stripe_key_set": True,
-                "stripe_key_preview": settings.stripe_secret_key[:10] + "...",
-                "test_api_call": "success",
-            }
-
-        except stripe.error.AuthenticationError as e:
-            return {
-                "success": False,
-                "error": "Stripe authentication failed - invalid API key",
-                "stripe_key_set": True,
-                "stripe_key_preview": settings.stripe_secret_key[:10] + "...",
-                "stripe_error": str(e),
-            }
-        except stripe.error.StripeError as e:
-            return {
-                "success": False,
-                "error": f"Stripe API error: {str(e)}",
-                "stripe_key_set": True,
-                "stripe_key_preview": settings.stripe_secret_key[:10] + "...",
-                "stripe_error": str(e),
-            }
-
-    except Exception as e:
-        logger.error(f"Error testing Stripe config: {e}")
-        return {
-            "success": False,
-            "error": f"Test failed: {str(e)}",
-            "exception": str(e),
-        }
-
-
-# Keep the rest of your existing endpoints unchanged...
-@router.post("/portal-session")
-async def create_portal_session(
-    current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)
-):
-    """Create Stripe customer portal session for subscription management"""
-    try:
-        # Get user from database to find their Stripe customer ID
-        user = db.query(User).filter(User.id == current_user["id"]).first()
-
-        if not user or not user.stripe_customer_id:
-            raise HTTPException(status_code=400, detail="No subscription found")
-
-        # Create portal session
-        portal_session = stripe.billing_portal.Session.create(
-            customer=user.stripe_customer_id,
-            return_url="https://pdfcontractanalyzer.com/",
-        )
-
-        return {"portal_url": portal_session.url}
-
-    except stripe.error.StripeError as e:
-        logger.error(f"Stripe error creating portal session: {e}")
-        raise HTTPException(status_code=500, detail=f"Payment system error: {str(e)}")
-    except Exception as e:
-        logger.error(f"Error creating portal session: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/portal-session")
-async def create_portal_session(
-    current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)
-):
-    """Create Stripe customer portal session for subscription management"""
-    try:
-        # Get user from database to find their Stripe customer ID
-        user = db.query(User).filter(User.id == current_user["id"]).first()
-
-        if not user or not user.stripe_customer_id:
-            raise HTTPException(status_code=400, detail="No subscription found")
-
-        # Create portal session
-        portal_session = stripe.billing_portal.Session.create(
-            customer=user.stripe_customer_id,
-            return_url="https://pdfcontractanalyzer.com/",
-        )
-
-        return {"portal_url": portal_session.url}
-
-    except stripe.error.StripeError as e:
-        logger.error(f"Stripe error creating portal session: {e}")
-        raise HTTPException(status_code=500, detail=f"Payment system error: {str(e)}")
-    except Exception as e:
-        logger.error(f"Error creating portal session: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/webhook")
-async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
-    """Handle Stripe webhooks"""
-    payload = await request.body()
-    sig_header = request.headers.get("stripe-signature")
-
-    try:
-        # Verify webhook signature (optional for testing, required for production)
-        if settings.stripe_webhook_secret:
-            event = stripe.Webhook.construct_event(
-                payload, sig_header, settings.stripe_webhook_secret
-            )
-        else:
-            # For testing without webhook secret
-            import json
-
-            event = json.loads(payload)
-
-        logger.info(f"Received Stripe webhook: {event['type']}")
-
-        # Handle different event types
-        if event["type"] == "checkout.session.completed":
-            session = event["data"]["object"]
-            await handle_checkout_completed(session, db)
-
-        elif event["type"] == "customer.subscription.updated":
-            subscription = event["data"]["object"]
-            await handle_subscription_updated(subscription, db)
-
-        elif event["type"] == "customer.subscription.deleted":
-            subscription = event["data"]["object"]
-            await handle_subscription_deleted(subscription, db)
-
-        elif event["type"] == "invoice.payment_succeeded":
-            invoice = event["data"]["object"]
-            await handle_payment_succeeded(invoice, db)
-
-        elif event["type"] == "invoice.payment_failed":
-            invoice = event["data"]["object"]
-            await handle_payment_failed(invoice, db)
-
-        return {"status": "success"}
-
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-# Replace the webhook functions in your app/api/payments.py
-
-
-async def handle_checkout_completed(session, db: Session):
-    """Handle successful checkout completion"""
-    try:
-        user_id = session["metadata"].get("user_id")
-        user_email = session["metadata"].get("user_email")
-
-        logger.info(
-            f"Processing checkout completion for user_id: {user_id}, email: {user_email}"
-        )
-
-        if not user_id:
-            logger.error("No user_id in session metadata")
-            return
-
-        user = db.query(User).filter(User.id == user_id).first()
-
-        if user:
-            # Update user with subscription info
-            user.stripe_customer_id = session["customer"]
-            user.has_premium = True
-            user.subscription_status = "active"
-            user.subscription_start_date = datetime.utcnow()
-
-            # If there's a subscription, get the subscription details
-            if session.get("subscription"):
-                try:
-                    subscription = stripe.Subscription.retrieve(session["subscription"])
-                    user.stripe_subscription_id = subscription.id
-                    user.current_period_start = datetime.fromtimestamp(
-                        subscription.current_period_start
-                    )
-                    user.current_period_end = datetime.fromtimestamp(
-                        subscription.current_period_end
-                    )
-                except Exception as e:
-                    logger.warning(f"Could not retrieve subscription details: {e}")
-
-            db.commit()
-            logger.info(
-                f"Successfully activated premium for user {user.email} (ID: {user_id})"
-            )
-        else:
-            logger.error(f"User not found with ID: {user_id}")
-
-    except Exception as e:
-        logger.error(f"Error handling checkout completion: {e}")
-        db.rollback()
-
-
-async def handle_subscription_updated(subscription, db: Session):
-    """Handle subscription updates"""
-    try:
-        customer_id = subscription["customer"]
-        user = db.query(User).filter(User.stripe_customer_id == customer_id).first()
-
-        if user:
-            # Update subscription status
-            status = subscription["status"]
-            user.subscription_status = status
-            user.has_premium = status in ["active", "trialing"]
-
-            # Update subscription timing
-            user.current_period_start = datetime.fromtimestamp(
-                subscription["current_period_start"]
-            )
-            user.current_period_end = datetime.fromtimestamp(
-                subscription["current_period_end"]
-            )
-            user.stripe_subscription_id = subscription["id"]
-
-            db.commit()
-            logger.info(f"Updated subscription for user {user.email}: {status}")
-        else:
-            logger.warning(f"User not found for customer_id: {customer_id}")
-
-    except Exception as e:
-        logger.error(f"Error handling subscription update: {e}")
-        db.rollback()
-
-
-async def handle_subscription_deleted(subscription, db: Session):
-    """Handle subscription cancellation"""
-    try:
-        customer_id = subscription["customer"]
-        user = db.query(User).filter(User.stripe_customer_id == customer_id).first()
-
-        if user:
-            user.has_premium = False
-            user.subscription_status = "cancelled"
-            user.subscription_end_date = datetime.utcnow()
-
-            db.commit()
-            logger.info(f"Cancelled subscription for user {user.email}")
-        else:
-            logger.warning(f"User not found for customer_id: {customer_id}")
-
-    except Exception as e:
-        logger.error(f"Error handling subscription deletion: {e}")
-        db.rollback()
-
-
-async def handle_subscription_updated(subscription, db: Session):
-    """Handle subscription updates"""
-    try:
-        customer_id = subscription["customer"]
-        user = db.query(User).filter(User.stripe_customer_id == customer_id).first()
-
-        if user:
-            # Update subscription status
-            status = subscription["status"]
-            user.subscription_status = status
-            user.has_premium = status in ["active", "trialing"]
-
-            db.commit()
-            logger.info(f"Updated subscription for user {user.email}: {status}")
-
-    except Exception as e:
-        logger.error(f"Error handling subscription update: {e}")
-
-
-async def handle_subscription_deleted(subscription, db: Session):
-    """Handle subscription cancellation"""
-    try:
-        customer_id = subscription["customer"]
-        user = db.query(User).filter(User.stripe_customer_id == customer_id).first()
-
-        if user:
-            user.has_premium = False
-            user.subscription_status = "cancelled"
-            user.subscription_end_date = datetime.utcnow()
-
-            db.commit()
-            logger.info(f"Cancelled subscription for user {user.email}")
-
-    except Exception as e:
-        logger.error(f"Error handling subscription deletion: {e}")
-
-
-async def handle_payment_succeeded(invoice, db: Session):
-    """Handle successful payment"""
-    logger.info(f"Payment succeeded for customer {invoice['customer']}")
-
-
-async def handle_payment_failed(invoice, db: Session):
-    """Handle failed payment"""
-    logger.error(f"Payment failed for customer {invoice['customer']}")
-
-
-@router.get("/config")
-async def get_stripe_config():
-    """Get Stripe publishable key for frontend"""
-    return {"publishable_key": settings.stripe_publishable_key}
-
-
 @router.post("/verify-session")
 async def verify_payment_session(
     request: dict,
@@ -537,6 +213,7 @@ async def verify_payment_session(
             # Commit the changes
             try:
                 db.commit()
+                db.refresh(user)  # Refresh to get updated data
                 logger.info(f"Successfully activated premium for user {user.email}")
             except Exception as commit_error:
                 logger.error(f"Database commit failed: {commit_error}")
@@ -584,7 +261,6 @@ async def verify_payment_session(
         raise HTTPException(status_code=500, detail=f"Verification failed: {str(e)}")
 
 
-# Also add a simple endpoint to check current subscription status
 @router.get("/subscription-status")
 async def get_subscription_status(
     current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)
@@ -621,3 +297,359 @@ async def get_subscription_status(
     except Exception as e:
         logger.error(f"Error getting subscription status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/portal-session")
+async def create_portal_session(
+    current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """Create Stripe customer portal session for subscription management"""
+    try:
+        # Get user from database to find their Stripe customer ID
+        user = db.query(User).filter(User.id == current_user["id"]).first()
+
+        if not user or not user.stripe_customer_id:
+            raise HTTPException(status_code=400, detail="No subscription found")
+
+        # Create portal session
+        portal_session = stripe.billing_portal.Session.create(
+            customer=user.stripe_customer_id,
+            return_url="https://pdfcontractanalyzer.com/",
+        )
+
+        return {"portal_url": portal_session.url}
+
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error creating portal session: {e}")
+        raise HTTPException(status_code=500, detail=f"Payment system error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error creating portal session: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/test-stripe-config")
+async def test_stripe_config():
+    """Test endpoint to validate Stripe configuration"""
+    try:
+        logger.info("Testing Stripe configuration...")
+
+        # Check if API key is set
+        if not settings.stripe_secret_key:
+            return {
+                "success": False,
+                "error": "No Stripe secret key configured",
+                "stripe_key_set": False,
+            }
+
+        if settings.stripe_secret_key.startswith("your_"):
+            return {
+                "success": False,
+                "error": "Stripe secret key appears to be placeholder",
+                "stripe_key_set": True,
+                "stripe_key_preview": settings.stripe_secret_key[:20] + "...",
+            }
+
+        # Try a simple Stripe API call
+        try:
+            # List products (should work with any valid key)
+            products = stripe.Product.list(limit=1)
+
+            return {
+                "success": True,
+                "message": "Stripe configuration is valid",
+                "stripe_key_set": True,
+                "stripe_key_preview": settings.stripe_secret_key[:10] + "...",
+                "test_api_call": "success",
+            }
+
+        except stripe.error.AuthenticationError as e:
+            return {
+                "success": False,
+                "error": "Stripe authentication failed - invalid API key",
+                "stripe_key_set": True,
+                "stripe_key_preview": settings.stripe_secret_key[:10] + "...",
+                "stripe_error": str(e),
+            }
+        except stripe.error.StripeError as e:
+            return {
+                "success": False,
+                "error": f"Stripe API error: {str(e)}",
+                "stripe_key_set": True,
+                "stripe_key_preview": settings.stripe_secret_key[:10] + "...",
+                "stripe_error": str(e),
+            }
+
+    except Exception as e:
+        logger.error(f"Error testing Stripe config: {e}")
+        return {
+            "success": False,
+            "error": f"Test failed: {str(e)}",
+            "exception": str(e),
+        }
+
+
+@router.get("/config")
+async def get_stripe_config():
+    """Get Stripe publishable key for frontend"""
+    return {"publishable_key": settings.stripe_publishable_key}
+
+
+# ===== WEBHOOK HANDLING =====
+
+
+@router.post("/webhook")
+async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
+    """Handle Stripe webhooks"""
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+
+    try:
+        # Verify webhook signature (optional for testing, required for production)
+        if settings.stripe_webhook_secret:
+            event = stripe.Webhook.construct_event(
+                payload, sig_header, settings.stripe_webhook_secret
+            )
+        else:
+            # For testing without webhook secret
+            import json
+
+            event = json.loads(payload)
+
+        logger.info(f"Received Stripe webhook: {event['type']}")
+
+        # Handle different event types
+        if event["type"] == "checkout.session.completed":
+            session = event["data"]["object"]
+            await handle_checkout_completed(session, db)
+
+        elif event["type"] == "customer.subscription.updated":
+            subscription = event["data"]["object"]
+            await handle_subscription_updated(subscription, db)
+
+        elif event["type"] == "customer.subscription.deleted":
+            subscription = event["data"]["object"]
+            await handle_subscription_deleted(subscription, db)
+
+        elif event["type"] == "invoice.payment_succeeded":
+            invoice = event["data"]["object"]
+            await handle_payment_succeeded(invoice, db)
+
+        elif event["type"] == "invoice.payment_failed":
+            invoice = event["data"]["object"]
+            await handle_payment_failed(invoice, db)
+
+        return {"status": "success"}
+
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        logger.error(f"Webhook traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ===== WEBHOOK HANDLERS =====
+
+
+async def handle_checkout_completed(session, db: Session):
+    """Handle successful checkout completion with better error handling"""
+    try:
+        user_id = session["metadata"].get("user_id")
+        user_email = session["metadata"].get("user_email")
+
+        logger.info(
+            f"Processing checkout completion for user_id: {user_id}, email: {user_email}"
+        )
+
+        if not user_id:
+            logger.error("No user_id in session metadata")
+            return
+
+        # Start a new transaction
+        try:
+            user = db.query(User).filter(User.id == user_id).first()
+
+            if not user:
+                logger.error(f"User not found with ID: {user_id}")
+                return
+
+            logger.info(
+                f"Found user: {user.email}, current premium status: {user.has_premium}"
+            )
+
+            # Update user with subscription info
+            user.stripe_customer_id = session["customer"]
+            user.has_premium = True
+            user.subscription_status = "active"
+            user.subscription_start_date = datetime.utcnow()
+
+            logger.info(
+                f"Updated user {user.email} - setting has_premium=True, status=active"
+            )
+
+            # If there's a subscription, get the subscription details
+            if session.get("subscription"):
+                try:
+                    subscription = stripe.Subscription.retrieve(session["subscription"])
+                    user.stripe_subscription_id = subscription.id
+
+                    if (
+                        hasattr(subscription, "current_period_start")
+                        and subscription.current_period_start
+                    ):
+                        user.current_period_start = datetime.fromtimestamp(
+                            subscription.current_period_start
+                        )
+
+                    if (
+                        hasattr(subscription, "current_period_end")
+                        and subscription.current_period_end
+                    ):
+                        user.current_period_end = datetime.fromtimestamp(
+                            subscription.current_period_end
+                        )
+
+                    logger.info(
+                        f"Retrieved subscription details for {user.email}: {subscription.id}"
+                    )
+
+                except stripe.error.StripeError as e:
+                    logger.warning(f"Could not retrieve subscription details: {e}")
+                    # Continue without subscription details
+                except Exception as e:
+                    logger.warning(f"Unexpected error retrieving subscription: {e}")
+
+            # Commit the transaction
+            db.commit()
+
+            # Verify the commit worked
+            db.refresh(user)
+            logger.info(
+                f"Successfully activated premium for user {user.email} (ID: {user_id}) - "
+                f"Verified: has_premium={user.has_premium}, status={user.subscription_status}"
+            )
+
+        except Exception as db_error:
+            logger.error(f"Database error during checkout completion: {db_error}")
+            logger.error(f"Rolling back transaction...")
+            db.rollback()
+
+            # Try to reactivate the user in a new transaction
+            try:
+                logger.info("Attempting recovery transaction...")
+                user = db.query(User).filter(User.id == user_id).first()
+                if user:
+                    user.has_premium = True
+                    user.subscription_status = "active"
+                    user.stripe_customer_id = session["customer"]
+                    user.subscription_start_date = datetime.utcnow()
+                    db.commit()
+                    logger.info(f"Recovery successful for user {user.email}")
+                else:
+                    logger.error(f"User {user_id} not found during recovery")
+            except Exception as recovery_error:
+                logger.error(f"Recovery transaction also failed: {recovery_error}")
+                db.rollback()
+
+    except Exception as e:
+        logger.error(f"Error handling checkout completion: {e}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        try:
+            db.rollback()
+        except:
+            pass
+
+
+async def handle_subscription_updated(subscription, db: Session):
+    """Handle subscription updates with better error handling"""
+    try:
+        customer_id = subscription["customer"]
+        logger.info(f"Processing subscription update for customer: {customer_id}")
+
+        user = db.query(User).filter(User.stripe_customer_id == customer_id).first()
+
+        if user:
+            # Update subscription status
+            status = subscription["status"]
+            old_status = user.subscription_status
+            old_premium = user.has_premium
+
+            user.subscription_status = status
+            user.has_premium = status in ["active", "trialing"]
+
+            # Update subscription timing if available
+            if subscription.get("current_period_start"):
+                user.current_period_start = datetime.fromtimestamp(
+                    subscription["current_period_start"]
+                )
+            if subscription.get("current_period_end"):
+                user.current_period_end = datetime.fromtimestamp(
+                    subscription["current_period_end"]
+                )
+
+            user.stripe_subscription_id = subscription["id"]
+
+            db.commit()
+
+            logger.info(
+                f"Updated subscription for user {user.email}: "
+                f"status {old_status} -> {status}, "
+                f"premium {old_premium} -> {user.has_premium}"
+            )
+        else:
+            logger.warning(f"User not found for customer_id: {customer_id}")
+
+    except Exception as e:
+        logger.error(f"Error handling subscription update: {e}")
+        try:
+            db.rollback()
+        except:
+            pass
+
+
+async def handle_subscription_deleted(subscription, db: Session):
+    """Handle subscription cancellation with better error handling"""
+    try:
+        customer_id = subscription["customer"]
+        logger.info(f"Processing subscription deletion for customer: {customer_id}")
+
+        user = db.query(User).filter(User.stripe_customer_id == customer_id).first()
+
+        if user:
+            old_status = user.subscription_status
+
+            user.has_premium = False
+            user.subscription_status = "cancelled"
+            user.subscription_end_date = datetime.utcnow()
+
+            db.commit()
+
+            logger.info(
+                f"Cancelled subscription for user {user.email}: "
+                f"status {old_status} -> cancelled, premium -> False"
+            )
+        else:
+            logger.warning(f"User not found for customer_id: {customer_id}")
+
+    except Exception as e:
+        logger.error(f"Error handling subscription deletion: {e}")
+        try:
+            db.rollback()
+        except:
+            pass
+
+
+async def handle_payment_succeeded(invoice, db: Session):
+    """Handle successful payment"""
+    try:
+        logger.info(f"Payment succeeded for customer {invoice['customer']}")
+        # You can add additional logic here if needed
+    except Exception as e:
+        logger.error(f"Error handling payment success: {e}")
+
+
+async def handle_payment_failed(invoice, db: Session):
+    """Handle failed payment"""
+    try:
+        logger.error(f"Payment failed for customer {invoice['customer']}")
+        # You can add logic to handle failed payments (e.g., send notifications)
+    except Exception as e:
+        logger.error(f"Error handling payment failure: {e}")
