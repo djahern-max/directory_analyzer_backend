@@ -5,6 +5,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 import httpx
 import jwt
+from jwt.exceptions import ExpiredSignatureError, InvalidTokenError  # Fixed import
 import logging
 from datetime import datetime, timedelta
 
@@ -213,9 +214,9 @@ async def get_current_user(request: Request, db: Session = Depends(get_db)):
                 else None
             ),
         }
-    except jwt.ExpiredSignatureError:
+    except ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
-    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+    except InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
@@ -269,7 +270,7 @@ async def refresh_premium_status(request: Request, db: Session = Depends(get_db)
             "message": "Premium status refreshed",
         }
 
-    except jwt.ExpiredSignatureError:
+    except ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.JWTError:
+    except InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
