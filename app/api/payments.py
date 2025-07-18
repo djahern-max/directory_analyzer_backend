@@ -1,4 +1,4 @@
-# Create new file: app/api/payments.py
+# app/api/payments.py - Updated version
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import RedirectResponse
 import stripe
@@ -11,8 +11,8 @@ from app.models.database import User
 from app.core.database import get_db
 from app.middleware.premium_check import get_current_user
 
-# Configure Stripe
-stripe.api_key = settings.STRIPE_SECRET_KEY
+# Configure Stripe - Fix the attribute access
+stripe.api_key = settings.stripe_secret_key
 
 router = APIRouter()
 logger = logging.getLogger("app.api.payments")
@@ -24,6 +24,20 @@ async def create_checkout_session(
 ):
     """Create Stripe checkout session for premium subscription"""
     try:
+        logger.info(f"Creating checkout session for user: {current_user['email']}")
+
+        # Validate Stripe configuration
+        if not settings.stripe_secret_key:
+            logger.error("Stripe secret key not configured")
+            raise HTTPException(status_code=500, detail="Payment system not configured")
+
+        # Check if user already has premium
+        user = db.query(User).filter(User.id == current_user["id"]).first()
+        if user and user.has_premium and user.subscription_status == "active":
+            raise HTTPException(
+                status_code=400, detail="User already has active subscription"
+            )
+
         # Create Stripe checkout session
         checkout_session = stripe.checkout.Session.create(
             payment_method_types=["card"],
@@ -48,7 +62,7 @@ async def create_checkout_session(
             cancel_url=f"https://pdfcontractanalyzer.com/?payment=cancelled",
             customer_email=current_user["email"],
             metadata={
-                "user_id": current_user["id"],
+                "user_id": str(current_user["id"]),
                 "user_email": current_user["email"],
             },
         )
@@ -59,6 +73,9 @@ async def create_checkout_session(
 
         return {"checkout_url": checkout_session.url, "session_id": checkout_session.id}
 
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error creating checkout session: {e}")
+        raise HTTPException(status_code=500, detail=f"Payment system error: {str(e)}")
     except Exception as e:
         logger.error(f"Error creating checkout session: {e}")
         raise HTTPException(status_code=500, detail=f"Payment setup failed: {str(e)}")
@@ -84,6 +101,9 @@ async def create_portal_session(
 
         return {"portal_url": portal_session.url}
 
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error creating portal session: {e}")
+        raise HTTPException(status_code=500, detail=f"Payment system error: {str(e)}")
     except Exception as e:
         logger.error(f"Error creating portal session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -97,9 +117,9 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
 
     try:
         # Verify webhook signature (optional for testing, required for production)
-        if settings.STRIPE_WEBHOOK_SECRET:
+        if settings.stripe_webhook_secret:
             event = stripe.Webhook.construct_event(
-                payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
+                payload, sig_header, settings.stripe_webhook_secret
             )
         else:
             # For testing without webhook secret
@@ -207,4 +227,4 @@ async def handle_payment_failed(invoice, db: Session):
 @router.get("/config")
 async def get_stripe_config():
     """Get Stripe publishable key for frontend"""
-    return {"publishable_key": settings.STRIPE_PUBLISHABLE_KEY}
+    return {"publishable_key": settings.stripe_publishable_key}

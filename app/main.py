@@ -7,6 +7,7 @@ from app.core.logging import setup_logging
 from app.core.exceptions import setup_exception_handlers
 from app.api import directories, auth  # Add auth import
 from app.api.middleware import setup_middleware
+from app.api import directories, auth, payments
 
 
 @asynccontextmanager
@@ -39,9 +40,8 @@ def create_application() -> FastAPI:
 
     # Include routers
     app.include_router(directories.router, prefix="/directories", tags=["directories"])
-    app.include_router(
-        auth.router, prefix="/auth", tags=["authentication"]
-    )  # Add this line
+    app.include_router(auth.router, prefix="/auth", tags=["authentication"])
+    app.include_router(payments.router, prefix="/payments", tags=["payments"])
 
     return app
 

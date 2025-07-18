@@ -52,9 +52,9 @@ class Settings(BaseSettings):
     runpod_endpoint: str = ""
 
     # FIXED: Stripe Settings with proper type annotations
-    stripe_publishable_key: str = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
-    stripe_secret_key: str = os.getenv("STRIPE_SECRET_KEY", "")
-    stripe_webhook_secret: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    stripe_publishable_key: str = ""
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
 
     # Encryption Settings
     encryption_key: str = ""
@@ -184,6 +184,11 @@ class Settings(BaseSettings):
             "secret_key": self.stripe_secret_key,
             "webhook_secret": self.stripe_webhook_secret,
         }
+
+    @property
+    def jwt_secret(self) -> str:
+        """Get JWT secret key (fallback for compatibility)"""
+        return self.jwt_secret_key or self.secret_key
 
 
 # Global settings instance

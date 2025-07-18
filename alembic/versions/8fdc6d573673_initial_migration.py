@@ -1,8 +1,8 @@
-"""add_stripe_subscription_fields
+"""initial_migration
 
-Revision ID: fd3f59a50959
-Revises: fb9cf81c8e5c
-Create Date: 2025-07-16 21:17:29.704717
+Revision ID: 8fdc6d573673
+Revises: 
+Create Date: 2025-07-18 11:44:18.353005
 
 """
 from typing import Sequence, Union
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'fd3f59a50959'
-down_revision: Union[str, Sequence[str], None] = 'fb9cf81c8e5c'
+revision: str = '8fdc6d573673'
+down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
