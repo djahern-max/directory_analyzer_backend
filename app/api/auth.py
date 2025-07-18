@@ -215,7 +215,7 @@ async def get_current_user(request: Request, db: Session = Depends(get_db)):
         }
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.JWTError:
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
