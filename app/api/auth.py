@@ -1,3 +1,5 @@
+# app/api/auth.py - Fixed version that checks database for premium status
+
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
@@ -14,19 +16,16 @@ router = APIRouter()
 logger = logging.getLogger("app.api.auth")
 
 
-def is_premium_user(email: str, db: Session) -> bool:
-    """Check if user has premium subscription from database"""
-    user = db.query(User).filter(User.email == email).first()
-    if user:
-        # Check if user has active premium subscription
-        return user.has_premium and user.subscription_status == "active"
-
-    # Fallback to test users if not in database yet
-    premium_test_users = [
-        "danielaherniv@gmail.com",  # Your email
-        # Add more emails here for testing
+def get_user_premium_status(user: User) -> tuple[bool, str]:
+    """Get current premium status from database"""
+    # Check if user has active premium subscription
+    has_premium = user.has_premium and user.subscription_status in [
+        "active",
+        "trialing",
     ]
-    return email.lower() in premium_test_users
+
+    # Return current status from database
+    return has_premium, user.subscription_status or "free"
 
 
 @router.get("/google")
@@ -68,7 +67,6 @@ async def google_callback(code: str, db: Session = Depends(get_db)):
 
             # Log the response for debugging
             logger.info(f"Google token response status: {token_response.status_code}")
-            logger.info(f"Google token response: {tokens}")
 
             # Check for errors in the response
             if "error" in tokens:
@@ -127,18 +125,23 @@ async def google_callback(code: str, db: Session = Depends(get_db)):
 
         db.commit()
 
-        # Check premium status from database
-        has_premium = is_premium_user(user.email, db)
-        logger.info(f"User {user.email} premium status: {has_premium}")
+        # Refresh user to get latest data from database
+        db.refresh(user)
 
-        # Create JWT token with premium information
+        # Get current premium status from database (FIXED: Always check database)
+        has_premium, subscription_status = get_user_premium_status(user)
+
+        logger.info(
+            f"User {user.email} premium status from database: {has_premium} (status: {subscription_status})"
+        )
+
+        # Create JWT token with CURRENT premium information from database
         token_data = {
             "user_id": str(user.id),
             "email": user.email,
-            "has_premium": has_premium,
-            "subscription_status": (
-                user.subscription_status if user.subscription_status else "free"
-            ),
+            "has_premium": has_premium,  # Use database value
+            "subscription_status": subscription_status,  # Use database value
+            "stripe_customer_id": user.stripe_customer_id,  # Include for debugging
             "exp": datetime.utcnow() + timedelta(minutes=settings.jwt_expire_minutes),
         }
 
@@ -151,7 +154,7 @@ async def google_callback(code: str, db: Session = Depends(get_db)):
         # Redirect to frontend with token
         frontend_url = f"https://pdfcontractanalyzer.com/?token={token}"
         logger.info(
-            f"Redirecting to frontend with token for user: {user_info['email']} (premium: {has_premium})"
+            f"Redirecting to frontend with token for user: {user_info['email']} (premium: {has_premium}, status: {subscription_status})"
         )
         return RedirectResponse(url=frontend_url)
 
@@ -164,7 +167,7 @@ async def google_callback(code: str, db: Session = Depends(get_db)):
 
 @router.get("/me")
 async def get_current_user(request: Request, db: Session = Depends(get_db)):
-    """Get current user info"""
+    """Get current user info with fresh database data"""
     try:
         # Extract token from Authorization header
         authorization = request.headers.get("Authorization")
@@ -184,7 +187,10 @@ async def get_current_user(request: Request, db: Session = Depends(get_db)):
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
 
-        # Return user info including current premium status from database
+        # Get CURRENT premium status from database (not from token)
+        has_premium, subscription_status = get_user_premium_status(user)
+
+        # Return user info with CURRENT premium status from database
         return {
             "id": str(user.id),
             "email": user.email,
@@ -192,8 +198,9 @@ async def get_current_user(request: Request, db: Session = Depends(get_db)):
             "picture_url": user.picture_url,
             "credits_remaining": float(user.credits_remaining),
             "is_active": user.is_active,
-            "has_premium": user.has_premium,
-            "subscription_status": user.subscription_status or "free",
+            "has_premium": has_premium,  # Fresh from database
+            "hasPremiumSubscription": has_premium,  # For frontend compatibility
+            "subscription_status": subscription_status,  # Fresh from database
             "stripe_customer_id": user.stripe_customer_id,
             "subscription_start_date": (
                 user.subscription_start_date.isoformat()
@@ -206,6 +213,62 @@ async def get_current_user(request: Request, db: Session = Depends(get_db)):
                 else None
             ),
         }
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+# New endpoint to refresh user premium status
+@router.post("/refresh-premium-status")
+async def refresh_premium_status(request: Request, db: Session = Depends(get_db)):
+    """Refresh user's premium status and return new token"""
+    try:
+        # Extract token from Authorization header
+        authorization = request.headers.get("Authorization")
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(
+                status_code=401, detail="Missing or invalid authorization header"
+            )
+
+        token = authorization.split(" ")[1]
+        payload = jwt.decode(
+            token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
+        )
+        user_id = payload.get("user_id")
+        user = db.query(User).filter(User.id == user_id).first()
+
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Get current premium status from database
+        has_premium, subscription_status = get_user_premium_status(user)
+
+        # Create new JWT token with current premium status
+        new_token_data = {
+            "user_id": str(user.id),
+            "email": user.email,
+            "has_premium": has_premium,
+            "subscription_status": subscription_status,
+            "stripe_customer_id": user.stripe_customer_id,
+            "exp": datetime.utcnow() + timedelta(minutes=settings.jwt_expire_minutes),
+        }
+
+        new_token = jwt.encode(
+            new_token_data,
+            settings.jwt_secret_key,
+            algorithm=settings.jwt_algorithm,
+        )
+
+        logger.info(f"Refreshed premium status for {user.email}: {has_premium}")
+
+        return {
+            "token": new_token,
+            "has_premium": has_premium,
+            "subscription_status": subscription_status,
+            "message": "Premium status refreshed",
+        }
+
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.JWTError:
