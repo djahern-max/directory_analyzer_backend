@@ -450,9 +450,6 @@ async def get_stripe_config():
     return {"publishable_key": settings.stripe_publishable_key}
 
 
-# Replace the verify_payment_session function in app/api/payments.py
-
-
 @router.post("/verify-session")
 async def verify_payment_session(
     request: dict,
@@ -474,80 +471,153 @@ async def verify_payment_session(
 
         # Verify this session belongs to the current user
         if session.metadata.get("user_id") != str(current_user["id"]):
+            logger.warning(
+                f"Session {session_id} does not belong to user {current_user['id']}"
+            )
             raise HTTPException(
                 status_code=403, detail="Session does not belong to current user"
             )
 
         # Check if payment was successful
         if session.payment_status == "paid" and session.status == "complete":
+            logger.info(f"Payment confirmed for session {session_id}")
+
             # Update user in database
             user = db.query(User).filter(User.id == current_user["id"]).first()
-            if user:
-                user.stripe_customer_id = session.customer
-                user.has_premium = True
-                user.subscription_status = "active"
-                user.subscription_start_date = datetime.utcnow()
-
-                # If there's a subscription, get more details with error handling
-                if session.subscription:
-                    try:
-                        subscription = stripe.Subscription.retrieve(
-                            session.subscription
-                        )
-                        user.stripe_subscription_id = subscription.id
-
-                        # Safe access to current_period_start and current_period_end
-                        if (
-                            hasattr(subscription, "current_period_start")
-                            and subscription.current_period_start
-                        ):
-                            user.current_period_start = datetime.fromtimestamp(
-                                subscription.current_period_start
-                            )
-
-                        if (
-                            hasattr(subscription, "current_period_end")
-                            and subscription.current_period_end
-                        ):
-                            user.current_period_end = datetime.fromtimestamp(
-                                subscription.current_period_end
-                            )
-
-                        logger.info(
-                            f"Updated subscription details for user {user.email}"
-                        )
-
-                    except Exception as sub_error:
-                        logger.warning(
-                            f"Could not retrieve subscription details: {sub_error}"
-                        )
-                        # Continue without subscription details
-
-                db.commit()
-
-                logger.info(f"Successfully activated premium for user {user.email}")
-
-                return {
-                    "success": True,
-                    "message": "Subscription activated successfully",
-                    "user": {
-                        "has_premium": user.has_premium,
-                        "subscription_status": user.subscription_status,
-                    },
-                }
-            else:
+            if not user:
                 raise HTTPException(status_code=404, detail="User not found")
+
+            # Update basic subscription info
+            user.stripe_customer_id = session.customer
+            user.has_premium = True
+            user.subscription_status = "active"
+            user.subscription_start_date = datetime.utcnow()
+
+            # If there's a subscription, get more details with error handling
+            subscription_details = {}
+            if session.subscription:
+                try:
+                    subscription = stripe.Subscription.retrieve(session.subscription)
+                    user.stripe_subscription_id = subscription.id
+                    subscription_details["subscription_id"] = subscription.id
+
+                    # Safe access to subscription dates
+                    if (
+                        hasattr(subscription, "current_period_start")
+                        and subscription.current_period_start
+                    ):
+                        user.current_period_start = datetime.fromtimestamp(
+                            subscription.current_period_start
+                        )
+                        subscription_details["period_start"] = (
+                            user.current_period_start.isoformat()
+                        )
+
+                    if (
+                        hasattr(subscription, "current_period_end")
+                        and subscription.current_period_end
+                    ):
+                        user.current_period_end = datetime.fromtimestamp(
+                            subscription.current_period_end
+                        )
+                        subscription_details["period_end"] = (
+                            user.current_period_end.isoformat()
+                        )
+
+                    logger.info(
+                        f"Retrieved subscription details: {subscription_details}"
+                    )
+
+                except Exception as sub_error:
+                    logger.warning(
+                        f"Could not retrieve subscription details: {sub_error}"
+                    )
+                    # Continue without subscription details
+
+            # Commit the changes
+            try:
+                db.commit()
+                logger.info(f"Successfully activated premium for user {user.email}")
+            except Exception as commit_error:
+                logger.error(f"Database commit failed: {commit_error}")
+                db.rollback()
+                raise HTTPException(
+                    status_code=500, detail="Failed to update subscription status"
+                )
+
+            # Return success response
+            return {
+                "success": True,
+                "message": "Subscription activated successfully",
+                "user": {
+                    "id": str(user.id),
+                    "email": user.email,
+                    "has_premium": user.has_premium,
+                    "hasPremiumSubscription": user.has_premium,  # Frontend compatibility
+                    "subscription_status": user.subscription_status,
+                    "stripe_customer_id": user.stripe_customer_id,
+                },
+                "subscription": subscription_details,
+                "session_verified": True,
+            }
         else:
             logger.warning(
-                f"Payment not completed for session {session_id}: status={session.status}, payment_status={session.payment_status}"
+                f"Payment not completed for session {session_id}: "
+                f"status={session.status}, payment_status={session.payment_status}"
             )
-            raise HTTPException(status_code=400, detail="Payment not completed")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Payment not completed. Status: {session.status}, Payment: {session.payment_status}",
+            )
 
     except stripe.error.StripeError as e:
         logger.error(f"Stripe error verifying session: {e}")
         raise HTTPException(
             status_code=500, detail=f"Payment verification failed: {str(e)}"
         )
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
     except Exception as e:
         logger.error(f"Error verifying payment session: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Verification failed: {str(e)}")
+
+
+# Also add a simple endpoint to check current subscription status
+@router.get("/subscription-status")
+async def get_subscription_status(
+    current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """Get current subscription status for debugging"""
+    try:
+        user = db.query(User).filter(User.id == current_user["id"]).first()
+
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        return {
+            "user_id": str(user.id),
+            "email": user.email,
+            "has_premium": user.has_premium,
+            "subscription_status": user.subscription_status,
+            "stripe_customer_id": user.stripe_customer_id,
+            "stripe_subscription_id": user.stripe_subscription_id,
+            "subscription_start_date": (
+                user.subscription_start_date.isoformat()
+                if user.subscription_start_date
+                else None
+            ),
+            "current_period_start": (
+                user.current_period_start.isoformat()
+                if user.current_period_start
+                else None
+            ),
+            "current_period_end": (
+                user.current_period_end.isoformat() if user.current_period_end else None
+            ),
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting subscription status: {e}")
         raise HTTPException(status_code=500, detail=str(e))

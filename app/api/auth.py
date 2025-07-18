@@ -166,6 +166,9 @@ async def google_callback(code: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Authentication failed: {str(e)}")
 
 
+# app/api/auth.py - Enhanced with better logging and error handling
+
+
 @router.get("/me")
 async def get_current_user(request: Request, db: Session = Depends(get_db)):
     """Get current user info with fresh database data"""
@@ -183,21 +186,29 @@ async def get_current_user(request: Request, db: Session = Depends(get_db)):
             token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
         )
         user_id = payload.get("user_id")
+
+        logger.info(f"Loading user data for user_id: {user_id}")
+
         user = db.query(User).filter(User.id == user_id).first()
 
         if not user:
+            logger.error(f"User not found in database: {user_id}")
             raise HTTPException(status_code=404, detail="User not found")
 
         # Get CURRENT premium status from database (not from token)
         has_premium, subscription_status = get_user_premium_status(user)
 
+        logger.info(
+            f"User {user.email} data loaded - Premium: {has_premium}, Status: {subscription_status}"
+        )
+
         # Return user info with CURRENT premium status from database
-        return {
+        user_data = {
             "id": str(user.id),
             "email": user.email,
             "name": user.name,
             "picture_url": user.picture_url,
-            "credits_remaining": float(user.credits_remaining),
+            "credits_remaining": float(user.credits_remaining or 0),
             "is_active": user.is_active,
             "has_premium": has_premium,  # Fresh from database
             "hasPremiumSubscription": has_premium,  # For frontend compatibility
@@ -214,13 +225,24 @@ async def get_current_user(request: Request, db: Session = Depends(get_db)):
                 else None
             ),
         }
+
+        logger.info(
+            f"Returning user data: {user_data['email']} - premium: {user_data['has_premium']}"
+        )
+        return user_data
+
     except ExpiredSignatureError:
+        logger.warning("Token expired")
         raise HTTPException(status_code=401, detail="Token expired")
     except InvalidTokenError:
+        logger.warning("Invalid token")
         raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        logger.error(f"Unexpected error in /auth/me: {e}")
+
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
-# New endpoint to refresh user premium status
 @router.post("/refresh-premium-status")
 async def refresh_premium_status(request: Request, db: Session = Depends(get_db)):
     """Refresh user's premium status and return new token"""
@@ -237,13 +259,23 @@ async def refresh_premium_status(request: Request, db: Session = Depends(get_db)
             token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
         )
         user_id = payload.get("user_id")
+
+        logger.info(f"Refreshing premium status for user_id: {user_id}")
+
         user = db.query(User).filter(User.id == user_id).first()
 
         if not user:
+            logger.error(f"User not found during premium refresh: {user_id}")
             raise HTTPException(status_code=404, detail="User not found")
 
         # Get current premium status from database
         has_premium, subscription_status = get_user_premium_status(user)
+
+        logger.info(
+            f"Current premium status for {user.email}: "
+            f"has_premium={has_premium}, status={subscription_status}, "
+            f"stripe_customer_id={user.stripe_customer_id}"
+        )
 
         # Create new JWT token with current premium status
         new_token_data = {
@@ -261,16 +293,69 @@ async def refresh_premium_status(request: Request, db: Session = Depends(get_db)
             algorithm=settings.jwt_algorithm,
         )
 
-        logger.info(f"Refreshed premium status for {user.email}: {has_premium}")
+        logger.info(f"Premium status refreshed for {user.email}: {has_premium}")
 
         return {
             "token": new_token,
             "has_premium": has_premium,
+            "hasPremiumSubscription": has_premium,  # Frontend compatibility
             "subscription_status": subscription_status,
-            "message": "Premium status refreshed",
+            "message": "Premium status refreshed successfully",
+            "user_id": str(user.id),
+            "email": user.email,
         }
 
     except ExpiredSignatureError:
+        logger.warning("Token expired during premium refresh")
         raise HTTPException(status_code=401, detail="Token expired")
     except InvalidTokenError:
+        logger.warning("Invalid token during premium refresh")
         raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        logger.error(f"Error refreshing premium status: {e}")
+
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# Add a debug endpoint to check what's in the database
+@router.get("/debug-user-status")
+async def debug_user_status(request: Request, db: Session = Depends(get_db)):
+    """Debug endpoint to check user status in database"""
+    try:
+        authorization = request.headers.get("Authorization")
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing authorization header")
+
+        token = authorization.split(" ")[1]
+        payload = jwt.decode(
+            token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
+        )
+        user_id = payload.get("user_id")
+
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        return {
+            "user_id": str(user.id),
+            "email": user.email,
+            "database_fields": {
+                "has_premium": user.has_premium,
+                "subscription_status": user.subscription_status,
+                "stripe_customer_id": user.stripe_customer_id,
+                "stripe_subscription_id": user.stripe_subscription_id,
+                "subscription_start_date": str(user.subscription_start_date),
+                "subscription_end_date": str(user.subscription_end_date),
+                "current_period_start": str(user.current_period_start),
+                "current_period_end": str(user.current_period_end),
+            },
+            "computed_status": get_user_premium_status(user),
+            "jwt_payload": {
+                "has_premium": payload.get("has_premium"),
+                "subscription_status": payload.get("subscription_status"),
+            },
+        }
+
+    except Exception as e:
+        logger.error(f"Debug endpoint error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
