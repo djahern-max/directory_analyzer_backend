@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 security = HTTPBearer()
 
 
-# Simplified version that works with your existing auth system
 async def verify_premium_subscription(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> dict:
@@ -34,28 +33,55 @@ async def verify_premium_subscription(
                 detail="Invalid authentication token",
             )
 
-        # For now, return user info - you can extend this later
-        user_info = {
-            "id": user_id,
-            "email": email,
-            "has_premium": payload.get("has_premium", False),  # Add this to your JWT
-            "subscription_status": payload.get("subscription_status", "free"),
-        }
+        # Get fresh user data from database (don't rely on JWT for premium status)
+        from app.core.database import get_db
+        from app.models.database import User
 
-        # Check if user has premium subscription
-        if not user_info.get("has_premium", False):
-            raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail={
-                    "error": "premium_subscription_required",
-                    "message": "Premium subscription required for this feature",
-                    "subscription_status": "free",
-                    "billing_url": "/pricing",
-                },
+        # We need to get a database session
+        db_gen = get_db()
+        db = next(db_gen)
+
+        try:
+            user = db.query(User).filter(User.id == user_id).first()
+
+            if not user:
+                logger.error(f"User not found in database: {user_id}")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="User not found",
+                )
+
+            logger.info(
+                f"Premium check for user {email}: has_premium={user.has_premium}, status={user.subscription_status}"
             )
 
-        logger.info(f"Premium user {email} authenticated successfully")
-        return user_info
+            user_info = {
+                "id": user_id,
+                "email": email,
+                "has_premium": user.has_premium,
+                "subscription_status": user.subscription_status,
+            }
+
+            # Check if user has premium subscription
+            if not user.has_premium or user.subscription_status != "active":
+                logger.warning(
+                    f"Premium access denied for user {email}: has_premium={user.has_premium}, status={user.subscription_status}"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail={
+                        "error": "premium_subscription_required",
+                        "message": "Premium subscription required for this feature",
+                        "subscription_status": user.subscription_status,
+                        "billing_url": "/pricing",
+                    },
+                )
+
+            logger.info(f"Premium user {email} authenticated successfully")
+            return user_info
+
+        finally:
+            db.close()
 
     except jwt.ExpiredSignatureError:
         raise HTTPException(
