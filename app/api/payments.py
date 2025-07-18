@@ -1,8 +1,9 @@
-# app/api/payments.py - Updated version
+# app/api/payments.py - Enhanced debug version
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import RedirectResponse
 import stripe
 import logging
+import traceback
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
@@ -26,59 +27,194 @@ async def create_checkout_session(
     try:
         logger.info(f"Creating checkout session for user: {current_user['email']}")
 
+        # Debug: Check Stripe configuration
+        logger.info(f"Stripe secret key configured: {bool(settings.stripe_secret_key)}")
+        logger.info(
+            f"Stripe secret key starts with: {settings.stripe_secret_key[:10] if settings.stripe_secret_key else 'None'}..."
+        )
+
         # Validate Stripe configuration
         if not settings.stripe_secret_key:
             logger.error("Stripe secret key not configured")
             raise HTTPException(status_code=500, detail="Payment system not configured")
 
+        if settings.stripe_secret_key.startswith("your_"):
+            logger.error("Stripe secret key appears to be placeholder value")
+            raise HTTPException(
+                status_code=500, detail="Payment system not properly configured"
+            )
+
         # Check if user already has premium
         user = db.query(User).filter(User.id == current_user["id"]).first()
         if user and user.has_premium and user.subscription_status == "active":
+            logger.warning(
+                f"User {current_user['email']} already has active subscription"
+            )
             raise HTTPException(
                 status_code=400, detail="User already has active subscription"
             )
 
-        # Create Stripe checkout session
-        checkout_session = stripe.checkout.Session.create(
-            payment_method_types=["card"],
-            line_items=[
-                {
-                    "price_data": {
-                        "currency": "usd",
-                        "product_data": {
-                            "name": "Contract Analysis Premium",
-                            "description": "Secure contract storage and AI analysis",
-                        },
-                        "unit_amount": 14900,  # $149.00 in cents
-                        "recurring": {
-                            "interval": "month",
-                        },
-                    },
-                    "quantity": 1,
-                }
-            ],
-            mode="subscription",
-            success_url=f"https://pdfcontractanalyzer.com/?payment=success&session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"https://pdfcontractanalyzer.com/?payment=cancelled",
-            customer_email=current_user["email"],
-            metadata={
-                "user_id": str(current_user["id"]),
-                "user_email": current_user["email"],
-            },
-        )
+        logger.info("Creating Stripe checkout session...")
 
-        logger.info(
-            f"Created checkout session for user {current_user['email']}: {checkout_session.id}"
-        )
+        # Create Stripe checkout session with enhanced error handling
+        try:
+            checkout_session = stripe.checkout.Session.create(
+                payment_method_types=["card"],
+                line_items=[
+                    {
+                        "price_data": {
+                            "currency": "usd",
+                            "product_data": {
+                                "name": "Contract Analysis Premium",
+                                "description": "Secure contract storage and AI analysis",
+                            },
+                            "unit_amount": 14900,  # $149.00 in cents
+                            "recurring": {
+                                "interval": "month",
+                            },
+                        },
+                        "quantity": 1,
+                    }
+                ],
+                mode="subscription",
+                success_url=f"https://pdfcontractanalyzer.com/?payment=success&session_id={{CHECKOUT_SESSION_ID}}",
+                cancel_url=f"https://pdfcontractanalyzer.com/?payment=cancelled",
+                customer_email=current_user["email"],
+                metadata={
+                    "user_id": str(current_user["id"]),
+                    "user_email": current_user["email"],
+                },
+            )
+
+            logger.info(f"Successfully created checkout session: {checkout_session.id}")
+            logger.info(f"Checkout URL: {checkout_session.url}")
+
+        except stripe.error.InvalidRequestError as e:
+            logger.error(f"Stripe InvalidRequestError: {e}")
+            logger.error(f"Error details: {e.user_message}")
+            raise HTTPException(
+                status_code=400, detail=f"Invalid payment request: {e.user_message}"
+            )
+
+        except stripe.error.AuthenticationError as e:
+            logger.error(f"Stripe AuthenticationError: {e}")
+            raise HTTPException(
+                status_code=500, detail="Payment system authentication failed"
+            )
+
+        except stripe.error.APIConnectionError as e:
+            logger.error(f"Stripe APIConnectionError: {e}")
+            raise HTTPException(
+                status_code=500, detail="Payment system connection failed"
+            )
+
+        except stripe.error.StripeError as e:
+            logger.error(f"Generic Stripe error: {e}")
+            logger.error(f"Stripe error type: {type(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Payment system error: {str(e)}"
+            )
 
         return {"checkout_url": checkout_session.url, "session_id": checkout_session.id}
 
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error creating checkout session: {e}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Payment setup failed: {str(e)}")
+
+
+# Test endpoint to validate Stripe configuration
+@router.get("/test-stripe-config")
+async def test_stripe_config():
+    """Test endpoint to validate Stripe configuration"""
+    try:
+        logger.info("Testing Stripe configuration...")
+
+        # Check if API key is set
+        if not settings.stripe_secret_key:
+            return {
+                "success": False,
+                "error": "No Stripe secret key configured",
+                "stripe_key_set": False,
+            }
+
+        if settings.stripe_secret_key.startswith("your_"):
+            return {
+                "success": False,
+                "error": "Stripe secret key appears to be placeholder",
+                "stripe_key_set": True,
+                "stripe_key_preview": settings.stripe_secret_key[:20] + "...",
+            }
+
+        # Try a simple Stripe API call
+        try:
+            # List products (should work with any valid key)
+            products = stripe.Product.list(limit=1)
+
+            return {
+                "success": True,
+                "message": "Stripe configuration is valid",
+                "stripe_key_set": True,
+                "stripe_key_preview": settings.stripe_secret_key[:10] + "...",
+                "test_api_call": "success",
+            }
+
+        except stripe.error.AuthenticationError as e:
+            return {
+                "success": False,
+                "error": "Stripe authentication failed - invalid API key",
+                "stripe_key_set": True,
+                "stripe_key_preview": settings.stripe_secret_key[:10] + "...",
+                "stripe_error": str(e),
+            }
+        except stripe.error.StripeError as e:
+            return {
+                "success": False,
+                "error": f"Stripe API error: {str(e)}",
+                "stripe_key_set": True,
+                "stripe_key_preview": settings.stripe_secret_key[:10] + "...",
+                "stripe_error": str(e),
+            }
+
+    except Exception as e:
+        logger.error(f"Error testing Stripe config: {e}")
+        return {
+            "success": False,
+            "error": f"Test failed: {str(e)}",
+            "exception": str(e),
+        }
+
+
+# Keep the rest of your existing endpoints unchanged...
+@router.post("/portal-session")
+async def create_portal_session(
+    current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """Create Stripe customer portal session for subscription management"""
+    try:
+        # Get user from database to find their Stripe customer ID
+        user = db.query(User).filter(User.id == current_user["id"]).first()
+
+        if not user or not user.stripe_customer_id:
+            raise HTTPException(status_code=400, detail="No subscription found")
+
+        # Create portal session
+        portal_session = stripe.billing_portal.Session.create(
+            customer=user.stripe_customer_id,
+            return_url="https://pdfcontractanalyzer.com/",
+        )
+
+        return {"portal_url": portal_session.url}
+
     except stripe.error.StripeError as e:
-        logger.error(f"Stripe error creating checkout session: {e}")
+        logger.error(f"Stripe error creating portal session: {e}")
         raise HTTPException(status_code=500, detail=f"Payment system error: {str(e)}")
     except Exception as e:
-        logger.error(f"Error creating checkout session: {e}")
-        raise HTTPException(status_code=500, detail=f"Payment setup failed: {str(e)}")
+        logger.error(f"Error creating portal session: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/portal-session")
