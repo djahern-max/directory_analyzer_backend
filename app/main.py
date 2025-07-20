@@ -38,12 +38,10 @@ def create_application() -> FastAPI:
     # Setup exception handlers
     setup_exception_handlers(app)
 
-    # Include routers - UPDATED: Add /api prefix to match frontend expectations
-    app.include_router(
-        directories_router, prefix="/api/directories", tags=["directories"]
-    )
-    app.include_router(auth.router, prefix="/api/auth", tags=["authentication"])
-    app.include_router(payments.router, prefix="/api/payments", tags=["payments"])
+    # Include routers - FIXED: Use correct imports
+    app.include_router(directories_router, prefix="/directories", tags=["directories"])
+    app.include_router(auth.router, prefix="/auth", tags=["authentication"])
+    app.include_router(payments.router, prefix="/payments", tags=["payments"])
 
     return app
 
@@ -61,19 +59,12 @@ async def root():
         "status": "running",
         "endpoints": {
             "health": "/health",
-            "directories": "/api/directories",
-            "auth": "/api/auth",
-            "payments": "/api/payments",
+            "directories": "/directories",
+            "auth": "/auth",
             "docs": "/docs",
             "redoc": "/redoc",
         },
     }
-
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy", "service": settings.app_name, "version": "1.0.0"}
 
 
 if __name__ == "__main__":
