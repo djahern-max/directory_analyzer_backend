@@ -1,4 +1,4 @@
-# app/models/database.py - Fixed relationships
+# app/models/database.py - Minimal working version with fixed relationships
 
 from sqlalchemy import (
     Column,
@@ -45,7 +45,7 @@ class StorageLocation(enum.Enum):
 
 
 class User(Base):
-    """User model"""
+    """User model - SIMPLIFIED"""
 
     __tablename__ = "users"
 
@@ -74,14 +74,12 @@ class User(Base):
     current_period_end = Column(DateTime(timezone=True), nullable=True)
     stripe_subscription_id = Column(String(255), nullable=True, index=True)
 
-    # FIXED: Correct relationships
-    jobs = relationship("Job", back_populates="user", cascade="all, delete-orphan")
-    analysis_sessions = relationship("AnalysisSession", back_populates="user")
-    usage_records = relationship("UsageRecord", back_populates="user")
+    # SIMPLIFIED: Only essential relationships to avoid circular issues
+    jobs = relationship("Job", back_populates="user")
 
 
 class Job(Base):
-    """Job model"""
+    """Job model - SIMPLIFIED"""
 
     __tablename__ = "jobs"
 
@@ -100,7 +98,7 @@ class Job(Base):
     end_date = Column(DateTime(timezone=True), nullable=True)
 
     # Status and tracking
-    status = Column(String(50), default="active")  # active, completed, cancelled
+    status = Column(String(50), default="active")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -115,22 +113,18 @@ class Job(Base):
     )
     spaces_prefix = Column(String(500), nullable=True)
 
-    # Relationships
+    # SIMPLIFIED: Only essential relationships
     user = relationship("User", back_populates="jobs")
-    contracts = relationship(
-        "Contract", back_populates="job", cascade="all, delete-orphan"
-    )
-    analysis_sessions = relationship("AnalysisSession", back_populates="job")
-    usage_records = relationship("UsageRecord", back_populates="job")
+    contracts = relationship("Contract", back_populates="job")
 
-    # Unique constraint on user_id + job_number
+    # Unique constraint
     __table_args__ = (
         UniqueConstraint("user_id", "job_number", name="_user_job_number_uc"),
     )
 
 
 class Contract(Base):
-    """Contract model for individual contract files"""
+    """Contract model - SIMPLIFIED"""
 
     __tablename__ = "contracts"
 
@@ -148,16 +142,16 @@ class Contract(Base):
 
     # File metadata
     file_size_bytes = Column(BigInteger, nullable=False)
-    file_hash = Column(String(64), nullable=True)  # SHA-256 hash for integrity
+    file_hash = Column(String(64), nullable=True)
     mime_type = Column(String(100), nullable=True)
 
     # Storage information
     storage_location = Column(
         SQLEnum(StorageLocation), default=StorageLocation.DIGITAL_OCEAN_SPACES
     )
-    file_key = Column(String(1000), nullable=False, unique=True)  # Full path in storage
+    file_key = Column(String(1000), nullable=False, unique=True)
     public_url = Column(String(1000), nullable=True)
-    storage_metadata = Column(Text, nullable=True)  # JSON metadata from storage
+    storage_metadata = Column(Text, nullable=True)
 
     # Timestamps
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -171,102 +165,12 @@ class Contract(Base):
     ai_analyzed = Column(Boolean, default=False)
     last_analyzed_at = Column(DateTime(timezone=True), nullable=True)
 
-    # Relationships
+    # SIMPLIFIED: Basic relationship only
     job = relationship("Job", back_populates="contracts")
-    text_extractions = relationship(
-        "TextExtraction", back_populates="contract", cascade="all, delete-orphan"
-    )
-    classifications = relationship(
-        "DocumentClassification",
-        back_populates="contract",
-        cascade="all, delete-orphan",
-    )
-    analysis_results = relationship(
-        "AnalysisResult", back_populates="contract", cascade="all, delete-orphan"
-    )
-
-
-class ContractRelationship(Base):
-    """Track relationships between contracts"""
-
-    __tablename__ = "contract_relationships"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    parent_contract_id = Column(
-        UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=False
-    )
-    child_contract_id = Column(
-        UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=False
-    )
-    relationship_type = Column(String(50), nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Relationships
-    parent_contract = relationship("Contract", foreign_keys=[parent_contract_id])
-    child_contract = relationship("Contract", foreign_keys=[child_contract_id])
-
-
-class TextExtraction(Base):
-    """Text extraction model"""
-
-    __tablename__ = "text_extractions"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=False)
-
-    extraction_method = Column(String(50), nullable=False)
-    extracted_text = Column(Text)
-    text_length = Column(Integer, default=0)
-    extraction_success = Column(Boolean, default=False)
-    extraction_error = Column(Text)
-    extraction_time_seconds = Column(Numeric(10, 3))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # OCR specific fields
-    confidence_score = Column(Numeric(5, 2))
-    page_count = Column(Integer)
-    text_storage_key = Column(String(500), nullable=True)
-
-    # Relationships
-    contract = relationship("Contract", back_populates="text_extractions")
-
-
-class DocumentClassification(Base):
-    """Document classification model"""
-
-    __tablename__ = "document_classifications"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=False)
-
-    classification_method = Column(String(50), default="claude_ai")
-
-    # Classification results
-    document_type = Column(String(50), default="UNKNOWN")
-    importance = Column(String(20), default="MEDIUM")
-    status = Column(String(50), default="UNKNOWN")
-    confidence = Column(String(20), default="MEDIUM")
-    summary = Column(Text)
-    recommendation = Column(String(50), default="REVIEW_MANUALLY")
-
-    # Extracted information
-    key_parties = Column(Text)
-    dollar_amount = Column(String(100))
-    project_info = Column(Text)
-
-    # AI metadata
-    ai_model = Column(String(100))
-    ai_tokens_used = Column(Integer)
-    classification_time_seconds = Column(Numeric(10, 3))
-    classification_error = Column(Text)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Relationships
-    contract = relationship("Contract", back_populates="classifications")
 
 
 class AnalysisSession(Base):
-    """Analysis session model - FIXED relationships"""
+    """Analysis session model - MINIMAL to avoid relationship issues"""
 
     __tablename__ = "analysis_sessions"
 
@@ -296,49 +200,11 @@ class AnalysisSession(Base):
     error_details = Column(Text)
     failed_contracts = Column(Text)
 
-    # FIXED: Correct relationships
-    job = relationship("Job", back_populates="analysis_sessions")
-    user = relationship("User", back_populates="analysis_sessions")
-    usage_records = relationship("UsageRecord", back_populates="session")
-
-
-class AnalysisResult(Base):
-    """Analysis result model"""
-
-    __tablename__ = "analysis_results"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=False)
-    job_id = Column(UUID(as_uuid=True), ForeignKey("jobs.id"), nullable=False)
-    session_id = Column(
-        UUID(as_uuid=True), ForeignKey("analysis_sessions.id"), nullable=True
-    )
-
-    # Ranking and scoring
-    importance_score = Column(Integer, default=0)
-    rank = Column(Integer)
-    priority_level = Column(String(50))
-    is_main_contract = Column(Boolean, default=False)
-    ranking_reason = Column(Text)
-
-    # Contract insights
-    key_dates = Column(Text)
-    key_amounts = Column(Text)
-    risk_factors = Column(Text)
-    compliance_notes = Column(Text)
-
-    # Analysis metadata
-    analysis_date = Column(DateTime(timezone=True), server_default=func.now())
-    analyzer_version = Column(String(50))
-
-    # Relationships
-    contract = relationship("Contract", back_populates="analysis_results")
-    job = relationship("Job")
-    session = relationship("AnalysisSession")
+    # NO RELATIONSHIPS - This is causing the circular issue
 
 
 class UsageRecord(Base):
-    """Usage tracking model - FIXED relationships"""
+    """Usage tracking model - MINIMAL"""
 
     __tablename__ = "usage_records"
 
@@ -357,7 +223,96 @@ class UsageRecord(Base):
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    # FIXED: Correct relationships
-    user = relationship("User", back_populates="usage_records")
-    session = relationship("AnalysisSession", back_populates="usage_records")
-    job = relationship("Job", back_populates="usage_records")
+    # NO RELATIONSHIPS - Keep it simple for now
+
+
+# Additional models can be added later without relationships
+class TextExtraction(Base):
+    """Text extraction model"""
+
+    __tablename__ = "text_extractions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=False)
+
+    extraction_method = Column(String(50), nullable=False)
+    extracted_text = Column(Text)
+    text_length = Column(Integer, default=0)
+    extraction_success = Column(Boolean, default=False)
+    extraction_error = Column(Text)
+    extraction_time_seconds = Column(Numeric(10, 3))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    confidence_score = Column(Numeric(5, 2))
+    page_count = Column(Integer)
+    text_storage_key = Column(String(500), nullable=True)
+
+
+class DocumentClassification(Base):
+    """Document classification model"""
+
+    __tablename__ = "document_classifications"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=False)
+
+    classification_method = Column(String(50), default="claude_ai")
+    document_type = Column(String(50), default="UNKNOWN")
+    importance = Column(String(20), default="MEDIUM")
+    status = Column(String(50), default="UNKNOWN")
+    confidence = Column(String(20), default="MEDIUM")
+    summary = Column(Text)
+    recommendation = Column(String(50), default="REVIEW_MANUALLY")
+
+    key_parties = Column(Text)
+    dollar_amount = Column(String(100))
+    project_info = Column(Text)
+
+    ai_model = Column(String(100))
+    ai_tokens_used = Column(Integer)
+    classification_time_seconds = Column(Numeric(10, 3))
+    classification_error = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AnalysisResult(Base):
+    """Analysis result model"""
+
+    __tablename__ = "analysis_results"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=False)
+    job_id = Column(UUID(as_uuid=True), ForeignKey("jobs.id"), nullable=False)
+    session_id = Column(
+        UUID(as_uuid=True), ForeignKey("analysis_sessions.id"), nullable=True
+    )
+
+    importance_score = Column(Integer, default=0)
+    rank = Column(Integer)
+    priority_level = Column(String(50))
+    is_main_contract = Column(Boolean, default=False)
+    ranking_reason = Column(Text)
+
+    key_dates = Column(Text)
+    key_amounts = Column(Text)
+    risk_factors = Column(Text)
+    compliance_notes = Column(Text)
+
+    analysis_date = Column(DateTime(timezone=True), server_default=func.now())
+    analyzer_version = Column(String(50))
+
+
+class ContractRelationship(Base):
+    """Track relationships between contracts"""
+
+    __tablename__ = "contract_relationships"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    parent_contract_id = Column(
+        UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=False
+    )
+    child_contract_id = Column(
+        UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=False
+    )
+    relationship_type = Column(String(50), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
