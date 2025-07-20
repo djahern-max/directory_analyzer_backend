@@ -5,9 +5,9 @@ from contextlib import asynccontextmanager
 from app.config import settings
 from app.core.logging import setup_logging
 from app.core.exceptions import setup_exception_handlers
-from app.api import directories, auth  # Add auth import
+from app.api import auth, payments  # Import modules that exist
+from app.api.directories import router as directories_router  # Import router directly
 from app.api.middleware import setup_middleware
-from app.api import directories, auth, payments
 
 
 @asynccontextmanager
@@ -38,8 +38,8 @@ def create_application() -> FastAPI:
     # Setup exception handlers
     setup_exception_handlers(app)
 
-    # Include routers
-    app.include_router(directories.router, prefix="/directories", tags=["directories"])
+    # Include routers - FIXED: Use correct imports
+    app.include_router(directories_router, prefix="/directories", tags=["directories"])
     app.include_router(auth.router, prefix="/auth", tags=["authentication"])
     app.include_router(payments.router, prefix="/payments", tags=["payments"])
 
@@ -60,7 +60,7 @@ async def root():
         "endpoints": {
             "health": "/health",
             "directories": "/directories",
-            "auth": "/auth",  # Add this
+            "auth": "/auth",
             "docs": "/docs",
             "redoc": "/redoc",
         },

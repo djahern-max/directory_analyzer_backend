@@ -1,4 +1,4 @@
-# app/models/database.py - Clean models without circular dependencies
+# app/models/database.py - Fixed relationships
 
 from sqlalchemy import (
     Column,
@@ -74,13 +74,14 @@ class User(Base):
     current_period_end = Column(DateTime(timezone=True), nullable=True)
     stripe_subscription_id = Column(String(255), nullable=True, index=True)
 
-    # Relationships
+    # FIXED: Correct relationships
     jobs = relationship("Job", back_populates="user", cascade="all, delete-orphan")
+    analysis_sessions = relationship("AnalysisSession", back_populates="user")
     usage_records = relationship("UsageRecord", back_populates="user")
 
 
 class Job(Base):
-    """Job model - NO circular dependencies"""
+    """Job model"""
 
     __tablename__ = "jobs"
 
@@ -107,15 +108,12 @@ class Job(Base):
 
     # Contract statistics
     total_contracts = Column(Integer, default=0)
-    # NOTE: NO main_contract_id to avoid circular dependency
 
     # Storage information
     storage_location = Column(
         SQLEnum(StorageLocation), default=StorageLocation.DIGITAL_OCEAN_SPACES
     )
-    spaces_prefix = Column(
-        String(500), nullable=True
-    )  # e.g., "users/{user_id}/jobs/{job_number}"
+    spaces_prefix = Column(String(500), nullable=True)
 
     # Relationships
     user = relationship("User", back_populates="jobs")
@@ -123,6 +121,7 @@ class Job(Base):
         "Contract", back_populates="job", cascade="all, delete-orphan"
     )
     analysis_sessions = relationship("AnalysisSession", back_populates="job")
+    usage_records = relationship("UsageRecord", back_populates="job")
 
     # Unique constraint on user_id + job_number
     __table_args__ = (
@@ -188,7 +187,7 @@ class Contract(Base):
 
 
 class ContractRelationship(Base):
-    """Track relationships between contracts (e.g., amendment to main contract)"""
+    """Track relationships between contracts"""
 
     __tablename__ = "contract_relationships"
 
@@ -199,9 +198,7 @@ class ContractRelationship(Base):
     child_contract_id = Column(
         UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=False
     )
-    relationship_type = Column(
-        String(50), nullable=False
-    )  # "amendment", "change_order", "schedule"
+    relationship_type = Column(String(50), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
@@ -217,9 +214,7 @@ class TextExtraction(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=False)
 
-    extraction_method = Column(
-        String(50), nullable=False
-    )  # "pdfplumber", "google_vision", etc.
+    extraction_method = Column(String(50), nullable=False)
     extracted_text = Column(Text)
     text_length = Column(Integer, default=0)
     extraction_success = Column(Boolean, default=False)
@@ -230,8 +225,6 @@ class TextExtraction(Base):
     # OCR specific fields
     confidence_score = Column(Numeric(5, 2))
     page_count = Column(Integer)
-
-    # Storage for extracted text (could be in separate storage for large texts)
     text_storage_key = Column(String(500), nullable=True)
 
     # Relationships
@@ -273,7 +266,7 @@ class DocumentClassification(Base):
 
 
 class AnalysisSession(Base):
-    """Analysis session model - NO circular dependencies"""
+    """Analysis session model - FIXED relationships"""
 
     __tablename__ = "analysis_sessions"
 
@@ -282,9 +275,7 @@ class AnalysisSession(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
 
     # Session metadata
-    session_type = Column(
-        String(50)
-    )  # "upload_analysis", "manual_analysis", "re_analysis"
+    session_type = Column(String(50))
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True))
     status = Column(String(50), default="running")
@@ -294,7 +285,6 @@ class AnalysisSession(Base):
     successful_extractions = Column(Integer, default=0)
     successful_classifications = Column(Integer, default=0)
     main_contract_identified = Column(Boolean, default=False)
-    # NOTE: NO main_contract_id to avoid circular dependency
 
     # Performance metrics
     total_time_seconds = Column(Numeric(10, 3))
@@ -304,11 +294,12 @@ class AnalysisSession(Base):
     # Error information
     error_message = Column(Text)
     error_details = Column(Text)
-    failed_contracts = Column(Text)  # JSON list of failed contract IDs
+    failed_contracts = Column(Text)
 
-    # Relationships
+    # FIXED: Correct relationships
     job = relationship("Job", back_populates="analysis_sessions")
-    user = relationship("User", back_populates="usage_records")
+    user = relationship("User", back_populates="analysis_sessions")
+    usage_records = relationship("UsageRecord", back_populates="session")
 
 
 class AnalysisResult(Base):
@@ -331,9 +322,9 @@ class AnalysisResult(Base):
     ranking_reason = Column(Text)
 
     # Contract insights
-    key_dates = Column(Text)  # JSON array of important dates
-    key_amounts = Column(Text)  # JSON array of monetary amounts
-    risk_factors = Column(Text)  # JSON array of identified risks
+    key_dates = Column(Text)
+    key_amounts = Column(Text)
+    risk_factors = Column(Text)
     compliance_notes = Column(Text)
 
     # Analysis metadata
@@ -347,7 +338,7 @@ class AnalysisResult(Base):
 
 
 class UsageRecord(Base):
-    """Usage tracking model"""
+    """Usage tracking model - FIXED relationships"""
 
     __tablename__ = "usage_records"
 
@@ -366,7 +357,7 @@ class UsageRecord(Base):
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    # Relationships
+    # FIXED: Correct relationships
     user = relationship("User", back_populates="usage_records")
-    session = relationship("AnalysisSession")
-    job = relationship("Job")
+    session = relationship("AnalysisSession", back_populates="usage_records")
+    job = relationship("Job", back_populates="usage_records")
