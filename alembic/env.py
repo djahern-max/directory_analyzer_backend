@@ -1,3 +1,4 @@
+# alembic/env.py
 from logging.config import fileConfig
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
@@ -8,6 +9,7 @@ import sys
 # Add your project root to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
+# Import your models
 from app.models.database import Base
 from app.config import settings
 

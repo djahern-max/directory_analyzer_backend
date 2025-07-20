@@ -1,4 +1,4 @@
-# app/models/database.py - Enhanced models for contract storage tracking
+# app/models/database.py - Clean models without circular dependencies
 
 from sqlalchemy import (
     Column,
@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Enum as SQLEnum,
+    UniqueConstraint,
 )
 from sqlalchemy.sql.sqltypes import Numeric
 from sqlalchemy.dialects.postgresql import UUID
@@ -18,7 +19,6 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import uuid
 import enum
-import sqlalchemy
 
 Base = declarative_base()
 
@@ -26,26 +26,27 @@ Base = declarative_base()
 class ContractType(enum.Enum):
     """Contract type enumeration"""
 
-    MAIN = "main"
-    AMENDMENT = "amendment"
-    CHANGE_ORDER = "change_order"
-    PROPOSAL = "proposal"
-    SCHEDULE = "schedule"
-    INSURANCE = "insurance"
-    CORRESPONDENCE = "correspondence"
-    UNKNOWN = "unknown"
+    MAIN = "MAIN"
+    AMENDMENT = "AMENDMENT"
+    CHANGE_ORDER = "CHANGE_ORDER"
+    PROPOSAL = "PROPOSAL"
+    SCHEDULE = "SCHEDULE"
+    INSURANCE = "INSURANCE"
+    CORRESPONDENCE = "CORRESPONDENCE"
+    UNKNOWN = "UNKNOWN"
 
 
 class StorageLocation(enum.Enum):
     """Storage location enumeration"""
 
-    DIGITAL_OCEAN_SPACES = "digital_ocean_spaces"
-    LOCAL_FILESYSTEM = "local_filesystem"
-    AWS_S3 = "aws_s3"
+    DIGITAL_OCEAN_SPACES = "DIGITAL_OCEAN_SPACES"
+    LOCAL_FILESYSTEM = "LOCAL_FILESYSTEM"
+    AWS_S3 = "AWS_S3"
 
 
-# Existing User model remains the same...
 class User(Base):
+    """User model"""
+
     __tablename__ = "users"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -79,7 +80,7 @@ class User(Base):
 
 
 class Job(Base):
-    """Enhanced Job model with user relationship"""
+    """Job model - NO circular dependencies"""
 
     __tablename__ = "jobs"
 
@@ -106,9 +107,7 @@ class Job(Base):
 
     # Contract statistics
     total_contracts = Column(Integer, default=0)
-    main_contract_id = Column(
-        UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=True
-    )
+    # NOTE: NO main_contract_id to avoid circular dependency
 
     # Storage information
     storage_location = Column(
@@ -121,26 +120,18 @@ class Job(Base):
     # Relationships
     user = relationship("User", back_populates="jobs")
     contracts = relationship(
-        "Contract",
-        back_populates="job",
-        cascade="all, delete-orphan",
-        foreign_keys="Contract.job_id",
-    )
-    main_contract = relationship(
-        "Contract", foreign_keys=[main_contract_id], post_update=True
+        "Contract", back_populates="job", cascade="all, delete-orphan"
     )
     analysis_sessions = relationship("AnalysisSession", back_populates="job")
 
     # Unique constraint on user_id + job_number
     __table_args__ = (
-        sqlalchemy.UniqueConstraint(
-            "user_id", "job_number", name="_user_job_number_uc"
-        ),
+        UniqueConstraint("user_id", "job_number", name="_user_job_number_uc"),
     )
 
 
 class Contract(Base):
-    """Enhanced Contract model for individual contract files"""
+    """Contract model for individual contract files"""
 
     __tablename__ = "contracts"
 
@@ -182,7 +173,7 @@ class Contract(Base):
     last_analyzed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships
-    job = relationship("Job", back_populates="contracts", foreign_keys=[job_id])
+    job = relationship("Job", back_populates="contracts")
     text_extractions = relationship(
         "TextExtraction", back_populates="contract", cascade="all, delete-orphan"
     )
@@ -218,11 +209,8 @@ class ContractRelationship(Base):
     child_contract = relationship("Contract", foreign_keys=[child_contract_id])
 
 
-# Enhanced existing models...
-
-
 class TextExtraction(Base):
-    """Enhanced text extraction model"""
+    """Text extraction model"""
 
     __tablename__ = "text_extractions"
 
@@ -251,7 +239,7 @@ class TextExtraction(Base):
 
 
 class DocumentClassification(Base):
-    """Enhanced document classification model"""
+    """Document classification model"""
 
     __tablename__ = "document_classifications"
 
@@ -285,7 +273,7 @@ class DocumentClassification(Base):
 
 
 class AnalysisSession(Base):
-    """Enhanced analysis session model"""
+    """Analysis session model - NO circular dependencies"""
 
     __tablename__ = "analysis_sessions"
 
@@ -306,9 +294,7 @@ class AnalysisSession(Base):
     successful_extractions = Column(Integer, default=0)
     successful_classifications = Column(Integer, default=0)
     main_contract_identified = Column(Boolean, default=False)
-    main_contract_id = Column(
-        UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=True
-    )
+    # NOTE: NO main_contract_id to avoid circular dependency
 
     # Performance metrics
     total_time_seconds = Column(Numeric(10, 3))
@@ -323,11 +309,10 @@ class AnalysisSession(Base):
     # Relationships
     job = relationship("Job", back_populates="analysis_sessions")
     user = relationship("User", back_populates="usage_records")
-    main_contract = relationship("Contract", foreign_keys=[main_contract_id])
 
 
 class AnalysisResult(Base):
-    """Enhanced analysis result model"""
+    """Analysis result model"""
 
     __tablename__ = "analysis_results"
 
@@ -361,8 +346,9 @@ class AnalysisResult(Base):
     session = relationship("AnalysisSession")
 
 
-# Usage tracking remains similar but references the new models
 class UsageRecord(Base):
+    """Usage tracking model"""
+
     __tablename__ = "usage_records"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
