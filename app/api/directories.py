@@ -1,3 +1,4 @@
+# app/api/directories.py - Updated upload endpoint
 from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form, Depends
 from fastapi.responses import JSONResponse
 import logging
@@ -24,9 +25,6 @@ router = APIRouter()
 logger = logging.getLogger("app.api.directories")
 
 
-# Updated upload endpoint in app/api/directories.py
-
-
 @router.post("/upload")
 async def upload_directory_files(
     files: List[UploadFile] = File(...),
@@ -39,7 +37,18 @@ async def upload_directory_files(
     )
 
     try:
-        from app.services.spaces_storage import spaces_storage
+        # Import and create spaces storage instance
+        from app.services.spaces_storage import get_spaces_storage
+
+        # Create storage service instance with proper error handling
+        try:
+            spaces_storage = get_spaces_storage()
+        except DirectoryAnalyzerException as e:
+            logger.error(f"Failed to initialize file storage: {e.message}")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"File storage service unavailable: {e.message}",
+            )
 
         uploaded_files = []
         failed_files = []
@@ -97,9 +106,14 @@ async def upload_directory_files(
             f"{len(uploaded_files)} successful, {len(failed_files)} failed"
         )
 
+        # Create a temporary directory path for analysis
+        # We'll use a special format that indicates these are uploaded files
+        analysis_directory_path = f"uploaded://{current_user['id']}/{directory_name}"
+
         return {
             "success": True,
             "directory_name": directory_name,
+            "directory_path": analysis_directory_path,  # Add this for analysis
             "files_uploaded": len(uploaded_files),
             "files_failed": len(failed_files),
             "total_size_bytes": total_size,
@@ -125,9 +139,7 @@ async def upload_directory_files(
 @router.post("/analyze")
 async def analyze_directory(
     request: DirectoryAnalysisRequest,
-    current_user: dict = Depends(
-        verify_premium_subscription
-    ),  # Fixed: Use dict instead of User
+    current_user: dict = Depends(verify_premium_subscription),
 ) -> Dict[str, Any]:
     """Analyze directory - PREMIUM ONLY"""
     logger.info(
@@ -137,7 +149,19 @@ async def analyze_directory(
     try:
         api_key = settings.anthropic_api_key
 
-        # Remove validation block - intelligence service handles validation
+        # Check if this is an uploaded files analysis
+        if request.directory_path.startswith("uploaded://"):
+            # For now, return a placeholder response
+            # You'll need to implement uploaded file analysis later
+            return {
+                "success": False,
+                "message": "Analysis of uploaded files not yet implemented",
+                "directory_path": request.directory_path,
+                "user": current_user["email"],
+                "note": "This feature will be implemented to analyze files from Digital Ocean Spaces",
+            }
+
+        # For traditional directory paths, use the existing intelligence service
         intelligence_service = create_contract_intelligence_service(api_key)
         analysis_result = intelligence_service.analyze_directory_complete(
             request.directory_path

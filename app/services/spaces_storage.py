@@ -1,4 +1,4 @@
-# app/services/spaces_storage.py
+# app/services/spaces_storage.py - Fixed version
 import boto3
 import logging
 from typing import Dict, Any, Optional, BinaryIO, List
@@ -17,12 +17,40 @@ class SpacesStorageService:
 
     def __init__(self):
         self.logger = logger
-        self.client = self._create_client()
+        # Set bucket_name BEFORE calling _create_client
         self.bucket_name = settings.spaces_bucket_name
+        self.client = self._create_client()
 
     def _create_client(self):
         """Create and configure the boto3 client for DO Spaces"""
         try:
+            # Validate required settings first
+            if not all(
+                [
+                    settings.spaces_endpoint_url,
+                    settings.spaces_region,
+                    settings.spaces_bucket_name,
+                    settings.spaces_access_key,
+                    settings.spaces_secret_key,
+                ]
+            ):
+                missing_settings = []
+                if not settings.spaces_endpoint_url:
+                    missing_settings.append("SPACES_ENDPOINT_URL")
+                if not settings.spaces_region:
+                    missing_settings.append("SPACES_REGION")
+                if not settings.spaces_bucket_name:
+                    missing_settings.append("SPACES_BUCKET_NAME")
+                if not settings.spaces_access_key:
+                    missing_settings.append("SPACES_ACCESS_KEY")
+                if not settings.spaces_secret_key:
+                    missing_settings.append("SPACES_SECRET_KEY")
+
+                raise DirectoryAnalyzerException(
+                    f"Missing Digital Ocean Spaces configuration: {', '.join(missing_settings)}",
+                    details={"missing_settings": missing_settings},
+                )
+
             client = boto3.client(
                 "s3",
                 endpoint_url=settings.spaces_endpoint_url,
@@ -32,19 +60,22 @@ class SpacesStorageService:
             )
 
             # Test the connection
-            self._test_connection()
+            self._test_connection(client)
             return client
 
+        except DirectoryAnalyzerException:
+            # Re-raise our custom exceptions
+            raise
         except Exception as e:
             logger.error(f"Failed to create Spaces client: {e}")
             raise DirectoryAnalyzerException(
                 "Failed to connect to Digital Ocean Spaces", details={"error": str(e)}
             )
 
-    def _test_connection(self):
+    def _test_connection(self, client):
         """Test the connection to Spaces"""
         try:
-            self.client.head_bucket(Bucket=self.bucket_name)
+            client.head_bucket(Bucket=self.bucket_name)
             logger.info(f"Successfully connected to Spaces bucket: {self.bucket_name}")
         except Exception as e:
             logger.error(f"Failed to connect to bucket {self.bucket_name}: {e}")
@@ -248,5 +279,16 @@ class SpacesStorageService:
         return content_types.get(extension, "application/octet-stream")
 
 
-# Global instance
-spaces_storage = SpacesStorageService()
+# Create a function to get the service instance
+def get_spaces_storage():
+    """Get a SpacesStorageService instance"""
+    try:
+        return SpacesStorageService()
+    except DirectoryAnalyzerException as e:
+        logger.error(f"Failed to initialize Spaces storage: {e.message}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error initializing Spaces storage: {e}")
+        raise DirectoryAnalyzerException(
+            "Failed to initialize file storage service", details={"error": str(e)}
+        )
