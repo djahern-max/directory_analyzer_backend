@@ -79,6 +79,13 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 1440
 
+    spaces_endpoint_url: str = ""
+    spaces_region: str = ""
+    spaces_bucket_name: str = ""
+    spaces_access_key: str = ""
+    spaces_secret_key: str = ""
+    spaces_public_url: str = ""
+
     # Logging
     log_level: str = "INFO"
     log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

@@ -24,87 +24,97 @@ router = APIRouter()
 logger = logging.getLogger("app.api.directories")
 
 
+# Updated upload endpoint in app/api/directories.py
+
+
 @router.post("/upload")
 async def upload_directory_files(
     files: List[UploadFile] = File(...),
     directory_name: str = Form(...),
-    current_user: dict = Depends(
-        verify_premium_subscription
-    ),  # Fixed: Use dict instead of User
+    current_user: dict = Depends(verify_premium_subscription),
 ) -> Dict[str, Any]:
-    """Upload files from browser and prepare them for analysis - PREMIUM ONLY"""
+    """Upload files to Digital Ocean Spaces - PREMIUM ONLY"""
     logger.info(
         f"Premium user {current_user['email']} uploading {len(files)} files for: {directory_name}"
     )
 
     try:
-        # Create a temporary directory for uploaded files
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        upload_dir = os.path.join(
-            tempfile.gettempdir(), "contract_analysis", f"{directory_name}_{timestamp}"
-        )
-
-        # Create the directory
-        os.makedirs(upload_dir, exist_ok=True)
+        from app.services.spaces_storage import spaces_storage
 
         uploaded_files = []
+        failed_files = []
         total_size = 0
 
-        # Save each uploaded file
+        # Process each uploaded file
         for file in files:
-            if file.filename and file.filename.lower().endswith(".pdf"):
-                # Clean filename and ensure it's safe
-                safe_filename = "".join(
-                    c for c in file.filename if c.isalnum() or c in (" ", "-", "_", ".")
-                ).rstrip()
+            try:
+                if not file.filename:
+                    failed_files.append(
+                        {"filename": "unknown", "error": "No filename provided"}
+                    )
+                    continue
 
-                file_path = os.path.join(upload_dir, safe_filename)
-
-                # Write file to disk
+                # Read file content
                 content = await file.read()
-                with open(file_path, "wb") as buffer:
-                    buffer.write(content)
-                    total_size += len(content)
+                total_size += len(content)
+
+                # Upload to Spaces
+                upload_result = spaces_storage.upload_file(
+                    file_content=content,
+                    filename=file.filename,
+                    user_id=str(current_user["id"]),
+                    directory_name=directory_name,
+                )
 
                 uploaded_files.append(
                     {
-                        "filename": safe_filename,
-                        "original_filename": file.filename,
-                        "size": len(content),
-                        "path": file_path,
+                        "filename": upload_result["filename"],
+                        "original_filename": upload_result["original_filename"],
+                        "size": upload_result["size"],
+                        "file_key": upload_result["file_key"],
+                        "public_url": upload_result["public_url"],
+                        "file_id": upload_result["file_id"],
                     }
                 )
 
-                logger.info(f"Saved file: {safe_filename} ({len(content)} bytes)")
+                logger.info(f"Successfully uploaded: {file.filename}")
+
+            except Exception as file_error:
+                logger.error(f"Failed to upload {file.filename}: {file_error}")
+                failed_files.append(
+                    {"filename": file.filename, "error": str(file_error)}
+                )
+
+        # Check if any files were successfully uploaded
+        if not uploaded_files:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No files were successfully uploaded",
+            )
 
         logger.info(
-            f"Successfully uploaded {len(uploaded_files)} files to {upload_dir}"
+            f"Upload completed for {current_user['email']}: "
+            f"{len(uploaded_files)} successful, {len(failed_files)} failed"
         )
 
         return {
             "success": True,
-            "directory_path": upload_dir,
             "directory_name": directory_name,
             "files_uploaded": len(uploaded_files),
+            "files_failed": len(failed_files),
             "total_size_bytes": total_size,
             "uploaded_files": uploaded_files,
-            "message": f"Files uploaded successfully. Use directory_path '{upload_dir}' for analysis.",
+            "failed_files": failed_files,
+            "message": f"Successfully uploaded {len(uploaded_files)} files to Digital Ocean Spaces",
             "user": current_user["email"],
+            "upload_location": "digital_ocean_spaces",
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"File upload failed for user {current_user['email']}: {e}")
         logger.error(f"Full traceback: {traceback.format_exc()}")
-
-        # Clean up on error
-        if "upload_dir" in locals() and os.path.exists(upload_dir):
-            try:
-                shutil.rmtree(upload_dir)
-                logger.info(f"Cleaned up failed upload directory: {upload_dir}")
-            except Exception as cleanup_error:
-                logger.error(
-                    f"Failed to cleanup directory {upload_dir}: {cleanup_error}"
-                )
 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
