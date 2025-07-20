@@ -1,8 +1,8 @@
 """enhanced_user_job_contract_structure
 
-Revision ID: fa56385a3cad
+Revision ID: 3f0f0e895123
 Revises:
-Create Date: 2025-01-20 12:00:00.000000
+Create Date: 2025-07-20 13:40:26.918045
 
 """
 
@@ -12,36 +12,60 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+
 # revision identifiers, used by Alembic.
-revision: str = "fa56385a3cad"
+revision: str = "3f0f0e895123"
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def get_or_create_enum(enum_name: str, enum_values: list):
+    """Helper function to get existing ENUM or create if it doesn't exist"""
+    connection = op.get_bind()
+
+    # Check if the ENUM type already exists
+    result = connection.execute(
+        sa.text("SELECT 1 FROM pg_type WHERE typname = :enum_name"),
+        {"enum_name": enum_name},
+    ).fetchone()
+
+    # Create the ENUM object (this doesn't create it in DB, just the Python object)
+    enum_type = postgresql.ENUM(*enum_values, name=enum_name)
+
+    if not result:
+        # Create the ENUM in the database only if it doesn't exist
+        enum_type.create(connection)
+        print(f"Created ENUM: {enum_name}")
+    else:
+        print(f"ENUM {enum_name} already exists, reusing existing")
+
+    return enum_type
+
+
 def upgrade() -> None:
-    """Upgrade schema - Create tables in correct order to avoid FK issues."""
+    """Upgrade schema - Create tables in CORRECT order to avoid FK issues."""
 
-    # First, create ENUMs
-    contracttype = postgresql.ENUM(
-        "MAIN",
-        "AMENDMENT",
-        "CHANGE_ORDER",
-        "PROPOSAL",
-        "SCHEDULE",
-        "INSURANCE",
-        "CORRESPONDENCE",
-        "UNKNOWN",
-        name="contracttype",
+    # Get or create ENUMs - this returns the ENUM objects to use in table definitions
+    contracttype = get_or_create_enum(
+        "contracttype",
+        [
+            "MAIN",
+            "AMENDMENT",
+            "CHANGE_ORDER",
+            "PROPOSAL",
+            "SCHEDULE",
+            "INSURANCE",
+            "CORRESPONDENCE",
+            "UNKNOWN",
+        ],
     )
-    contracttype.create(op.get_bind())
 
-    storagelocation = postgresql.ENUM(
-        "DIGITAL_OCEAN_SPACES", "LOCAL_FILESYSTEM", "AWS_S3", name="storagelocation"
+    storagelocation = get_or_create_enum(
+        "storagelocation", ["DIGITAL_OCEAN_SPACES", "LOCAL_FILESYSTEM", "AWS_S3"]
     )
-    storagelocation.create(op.get_bind())
 
-    # 1. Create users table first (no dependencies)
+    # 1. Create users table FIRST (no dependencies)
     op.create_table(
         "users",
         sa.Column("id", sa.UUID(), nullable=False),
@@ -88,7 +112,8 @@ def upgrade() -> None:
         unique=False,
     )
 
-    # 2. Create jobs table (depends on users)
+    # 2. Create jobs table SECOND (depends only on users)
+    # NOTE: Removed main_contract_id to avoid circular dependency as per your model
     op.create_table(
         "jobs",
         sa.Column("id", sa.UUID(), nullable=False),
@@ -114,6 +139,7 @@ def upgrade() -> None:
             nullable=True,
         ),
         sa.Column("total_contracts", sa.Integer(), nullable=True),
+        # REMOVED main_contract_id to avoid circular dependency
         sa.Column("storage_location", storagelocation, nullable=True),
         sa.Column("spaces_prefix", sa.String(length=500), nullable=True),
         sa.ForeignKeyConstraint(
@@ -125,7 +151,7 @@ def upgrade() -> None:
     )
     op.create_index(op.f("ix_jobs_job_number"), "jobs", ["job_number"], unique=False)
 
-    # 3. Create contracts table (depends on jobs)
+    # 3. Create contracts table THIRD (depends on jobs)
     op.create_table(
         "contracts",
         sa.Column("id", sa.UUID(), nullable=False),
@@ -178,6 +204,7 @@ def upgrade() -> None:
     )
 
     # 4. Create analysis_sessions table (depends on jobs and users)
+    # NOTE: Removed main_contract_id to avoid circular dependency as per your model
     op.create_table(
         "analysis_sessions",
         sa.Column("id", sa.UUID(), nullable=False),
@@ -196,6 +223,7 @@ def upgrade() -> None:
         sa.Column("successful_extractions", sa.Integer(), nullable=True),
         sa.Column("successful_classifications", sa.Integer(), nullable=True),
         sa.Column("main_contract_identified", sa.Boolean(), nullable=True),
+        # REMOVED main_contract_id to avoid circular dependency
         sa.Column(
             "total_time_seconds", sa.Numeric(precision=10, scale=3), nullable=True
         ),
@@ -377,6 +405,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Downgrade schema - Drop tables in reverse order."""
+    # Drop tables in reverse dependency order
     op.drop_table("usage_records")
     op.drop_table("analysis_results")
     op.drop_table("text_extractions")
@@ -391,21 +420,33 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_users_stripe_customer_id"), table_name="users")
     op.drop_table("users")
 
-    # Drop ENUMs
-    contracttype = postgresql.ENUM(
-        "MAIN",
-        "AMENDMENT",
-        "CHANGE_ORDER",
-        "PROPOSAL",
-        "SCHEDULE",
-        "INSURANCE",
-        "CORRESPONDENCE",
-        "UNKNOWN",
-        name="contracttype",
-    )
-    contracttype.drop(op.get_bind())
+    # Drop ENUMs only if they exist
+    connection = op.get_bind()
 
-    storagelocation = postgresql.ENUM(
-        "DIGITAL_OCEAN_SPACES", "LOCAL_FILESYSTEM", "AWS_S3", name="storagelocation"
-    )
-    storagelocation.drop(op.get_bind())
+    # Check and drop contracttype ENUM
+    result = connection.execute(
+        sa.text("SELECT 1 FROM pg_type WHERE typname = 'contracttype'")
+    ).fetchone()
+    if result:
+        contracttype = postgresql.ENUM(
+            "MAIN",
+            "AMENDMENT",
+            "CHANGE_ORDER",
+            "PROPOSAL",
+            "SCHEDULE",
+            "INSURANCE",
+            "CORRESPONDENCE",
+            "UNKNOWN",
+            name="contracttype",
+        )
+        contracttype.drop(connection)
+
+    # Check and drop storagelocation ENUM
+    result = connection.execute(
+        sa.text("SELECT 1 FROM pg_type WHERE typname = 'storagelocation'")
+    ).fetchone()
+    if result:
+        storagelocation = postgresql.ENUM(
+            "DIGITAL_OCEAN_SPACES", "LOCAL_FILESYSTEM", "AWS_S3", name="storagelocation"
+        )
+        storagelocation.drop(connection)
