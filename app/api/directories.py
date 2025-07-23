@@ -198,25 +198,6 @@ def extract_job_number(directory_name: str) -> str:
     return re.sub(r"[^\w\-]", "", first_word)
 
 
-@router.get("/service-status")
-async def get_service_status():
-    """Get service status - FREE endpoint for testing"""
-    try:
-        return {
-            "service": "Directory Analyzer API",
-            "status": "operational",
-            "version": "1.0.0",
-            "endpoints": {
-                "upload": "/directories/upload (Premium)",
-                "analyze": "/directories/analyze (Premium)",
-                "service_status": "/directories/service-status (Free)",
-            },
-        }
-    except Exception as e:
-        logger.error(f"Service status check failed: {e}")
-        raise HTTPException(status_code=500, detail="Service status unavailable")
-
-
 @router.get("/jobs")
 async def get_user_jobs(
     current_user: dict = Depends(verify_premium_subscription),

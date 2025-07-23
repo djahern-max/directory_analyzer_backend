@@ -54,9 +54,12 @@ class DocumentChatService:
                     store_document_text(db, document_id, document_text)
                 else:
                     # For demo purposes, use placeholder text
-                    document_text = (
-                        f"This is a sample contract document for {document_info.get('filename', document_id)}. "
-                        * 10
+                    raise DirectoryAnalyzerException(
+                        f"Could not extract text from document: {document_id}",
+                        details={
+                            "document_id": document_id,
+                            "reason": "Text extraction failed",
+                        },
                     )
 
             # Generate document analysis summary
