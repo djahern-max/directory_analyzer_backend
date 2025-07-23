@@ -53,7 +53,7 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False)
     google_id = Column(String(255), unique=True, nullable=True)
     name = Column(String(255), nullable=False)
-    picture_url = Column(String(1000), nullable=True)
+    picture_url = Column(String(2000), nullable=True)
 
     # Billing info
     credits_remaining = Column(Numeric(10, 4), default=0.0)
