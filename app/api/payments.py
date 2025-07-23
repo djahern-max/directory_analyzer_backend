@@ -11,6 +11,7 @@ from app.config import settings
 from app.models.database import User
 from app.core.database import get_db
 from app.middleware.premium_check import get_current_user
+import jwt
 
 # Configure Stripe
 stripe.api_key = settings.stripe_secret_key
@@ -210,7 +211,7 @@ async def verify_payment_session(
                     )
                     # Continue without subscription details
 
-            # Commit the changes
+            # Commit the database changes
             try:
                 db.commit()
                 db.refresh(user)  # Refresh to get updated data
@@ -222,10 +223,33 @@ async def verify_payment_session(
                     status_code=500, detail="Failed to update subscription status"
                 )
 
-            # Return success response
+            # Generate new JWT token with premium status
+            new_token_data = {
+                "user_id": str(user.id),
+                "email": user.email,
+                "has_premium": user.has_premium,  # Should be True now
+                "subscription_status": user.subscription_status,  # Should be "active" now
+                "stripe_customer_id": user.stripe_customer_id,
+                "exp": datetime.utcnow()
+                + timedelta(minutes=settings.jwt_expire_minutes),
+            }
+
+            new_token = jwt.encode(
+                new_token_data,
+                settings.jwt_secret_key,
+                algorithm=settings.jwt_algorithm,
+            )
+
+            logger.info(
+                f"Generated new premium token for {user.email}: "
+                f"has_premium={user.has_premium}, status={user.subscription_status}"
+            )
+
+            # Return success response with new token
             return {
                 "success": True,
                 "message": "Subscription activated successfully",
+                "token": new_token,
                 "user": {
                     "id": str(user.id),
                     "email": user.email,
