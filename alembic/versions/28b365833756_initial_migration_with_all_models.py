@@ -1,8 +1,8 @@
-"""initial migrations
+"""Initial migration with all models
 
-Revision ID: 9089b319614d
+Revision ID: 28b365833756
 Revises: 
-Create Date: 2025-07-20 13:55:12.805497
+Create Date: 2025-07-22 20:02:43.548925
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '9089b319614d'
+revision: str = '28b365833756'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -136,6 +136,21 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['session_id'], ['analysis_sessions.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_table('chat_messages',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('user_id', sa.UUID(), nullable=False),
+    sa.Column('contract_id', sa.UUID(), nullable=True),
+    sa.Column('role', sa.String(length=20), nullable=False),
+    sa.Column('content', sa.Text(), nullable=False),
+    sa.Column('document_filename', sa.String(length=255), nullable=True),
+    sa.Column('job_number', sa.String(length=100), nullable=True),
+    sa.Column('confidence', sa.String(length=20), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.ForeignKeyConstraint(['contract_id'], ['contracts.id'], ),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
     op.create_table('contract_relationships',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('parent_contract_id', sa.UUID(), nullable=False),
@@ -208,6 +223,7 @@ def downgrade() -> None:
     op.drop_table('text_extractions')
     op.drop_table('document_classifications')
     op.drop_table('contract_relationships')
+    op.drop_table('chat_messages')
     op.drop_table('analysis_results')
     op.drop_index(op.f('ix_contracts_is_main_contract'), table_name='contracts')
     op.drop_table('contracts')

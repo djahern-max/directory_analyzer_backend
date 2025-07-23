@@ -1,4 +1,3 @@
-# app/models/__init__.py
 from .database import (
     Base,
     User,
@@ -10,6 +9,7 @@ from .database import (
     AnalysisSession,
     AnalysisResult,
     UsageRecord,
+    ChatMessage,  # Add this line
     ContractType,
     StorageLocation,
 )
@@ -25,6 +25,7 @@ __all__ = [
     "AnalysisSession",
     "AnalysisResult",
     "UsageRecord",
+    "ChatMessage",  # Add this line
     "ContractType",
     "StorageLocation",
 ]

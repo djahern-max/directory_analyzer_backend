@@ -316,3 +316,28 @@ class ContractRelationship(Base):
     )
     relationship_type = Column(String(50), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ChatMessage(Base):
+    """Chat message model for document conversations"""
+
+    __tablename__ = "chat_messages"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=True)
+
+    # Message content
+    role = Column(String(20), nullable=False)  # 'user' or 'assistant'
+    content = Column(Text, nullable=False)
+
+    # Metadata
+    document_filename = Column(String(255), nullable=True)
+    job_number = Column(String(100), nullable=True)
+    confidence = Column(String(20), nullable=True)  # 'HIGH', 'MEDIUM', 'LOW'
+
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
