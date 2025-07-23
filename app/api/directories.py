@@ -198,34 +198,6 @@ def extract_job_number(directory_name: str) -> str:
     return re.sub(r"[^\w\-]", "", first_word)
 
 
-@router.post("/analyze")
-async def analyze_directory(
-    request: DirectoryAnalysisRequest,
-    user: dict = Depends(verify_premium_subscription),
-    api_key: str = Depends(get_api_key),
-):
-    """Analyze directory - PREMIUM ONLY"""
-    try:
-        logger.info(
-            f"Starting directory analysis for user {user['email']}: {request.directory_path}"
-        )
-
-        # Create contract intelligence service
-        service = create_contract_intelligence_service(api_key)
-
-        # Run the analysis
-        results = service.analyze_directory_complete(request.directory_path)
-
-        logger.info(f"Analysis completed for user {user['email']}")
-        return results
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Analysis failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
-
-
 @router.get("/service-status")
 async def get_service_status():
     """Get service status - FREE endpoint for testing"""
