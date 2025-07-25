@@ -423,8 +423,8 @@ class DocumentChatService:
 
             # Format the request for Claude
             data = {
-                "model": "claude-3-sonnet-20240229",
-                "max_tokens": 1000,
+                "model": settings.anthropic_model,
+                "max_tokens": settings.anthropic_max_tokens,
                 "messages": [{"role": "user", "content": prompt}],
             }
 
