@@ -9,6 +9,8 @@ from app.api import auth, payments  # Import modules that exist
 from app.api.directories import router as directories_router  # Import router directly
 from app.api.middleware import setup_middleware
 from app.api import document_chat
+from fastapi.routing import APIRoute
+from fastapi.responses import PlainTextResponse
 
 
 @asynccontextmanager
@@ -67,6 +69,20 @@ async def root():
             "redoc": "/redoc",
         },
     }
+
+
+@app.get("/routes-simple", response_class=PlainTextResponse)
+async def get_routes_simple():
+    """
+    Returns a concise list of all routes with their paths and methods.
+    """
+    routes = []
+    for route in app.routes:
+        if isinstance(route, APIRoute):
+            methods = ", ".join(route.methods)
+            routes.append(f"{methods}: {route.path}")
+
+    return "\n".join(routes)
 
 
 if __name__ == "__main__":
