@@ -12,19 +12,17 @@ from app.services.spaces_storage import get_spaces_storage
 logger = logging.getLogger("app.services.database_operations")
 
 
-def get_job_documents(
-    db: Session, job_number: str, document_id: str, user_id: str = None
-) -> Optional[Dict]:
+def get_job_documents(db: Session, job_number: str, document_id: str) -> Optional[Dict]:
     """Get document info from Digital Ocean Spaces (since DB is empty)"""
     try:
-        # If document_id is a full Spaces path, extract user_id
+        # If document_id is a full Spaces path, extract user_id and find the document
         if document_id.startswith("users/") and "/" in document_id:
             path_parts = document_id.split("/")
-            extracted_user_id = path_parts[1]
+            user_id = path_parts[1]
 
             # Get contracts from Spaces
             storage = get_spaces_storage()
-            contracts = storage.list_job_contracts(extracted_user_id, job_number)
+            contracts = storage.list_job_contracts(user_id, job_number)
 
             # Find the matching document
             for contract in contracts:
@@ -34,13 +32,14 @@ def get_job_documents(
                         "filename": contract.get(
                             "original_filename", document_id.split("/")[-1]
                         ),
-                        "file_path": contract["file_key"],
+                        "file_path": contract["file_key"],  # This is the Spaces path
                         "document_type": contract.get("contract_type", "UNKNOWN"),
                         "file_size_mb": contract.get("size", 0) / (1024 * 1024),
                         "job_number": job_number,
                         "public_url": contract.get("public_url"),
                     }
 
+        logger.warning(f"Document {document_id} not found for job {job_number}")
         return None
 
     except Exception as e:
