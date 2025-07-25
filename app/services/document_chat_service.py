@@ -29,67 +29,98 @@ class DocumentChatService:
         self.ai_classifier = create_ai_classifier(api_key)
         self.logger = logger
 
-    async def load_document(
-        self, db: Session, job_number: str, document_id: str, user_id: int
-    ) -> Dict[str, Any]:
-        """Load a document and prepare it for chat analysis"""
-        try:
-            # Get document information from database
-            document_info = get_job_documents(db, job_number, document_id)
 
-            if not document_info:
-                raise DirectoryAnalyzerException(
-                    f"Document {document_id} not found for job {job_number}"
-                )
+async def load_document(
+    self, db: Session, job_number: str, document_id: str, user_id: str
+) -> Dict[str, Any]:
+    """Load a document and prepare it for chat analysis"""
+    try:
+        # Get document information from database
+        document_info = get_job_documents(db, job_number, document_id)
 
-            # Extract full document text if not already cached
-            document_text = get_document_text(db, document_id)
+        if not document_info:
+            raise DirectoryAnalyzerException(
+                f"Document {document_id} not found for job {job_number}"
+            )
 
-            if not document_text:
-                # Extract text from file if file path exists
-                file_path = Path(document_info.get("file_path", ""))
-                if file_path.exists():
-                    document_text = pdf_extractor.extract_text_from_file(file_path)
-                    # Store extracted text for future use
-                    store_document_text(db, document_id, document_text)
-                else:
-                    # For demo purposes, use placeholder text
-                    raise DirectoryAnalyzerException(
-                        f"Could not extract text from document: {document_id}",
-                        details={
-                            "document_id": document_id,
-                            "reason": "Text extraction failed",
-                        },
+        # Extract full document text if not already cached
+        document_text = get_document_text(db, document_id)
+
+        if not document_text:
+            # FIXED: Download file from Spaces and extract text
+            try:
+                from app.services.spaces_storage import get_spaces_storage
+                import tempfile
+                import os
+
+                # Get the file from Digital Ocean Spaces
+                storage = get_spaces_storage()
+                file_content = storage.download_file(document_id)
+
+                # Create a temporary file for text extraction
+                with tempfile.NamedTemporaryFile(
+                    suffix=".pdf", delete=False
+                ) as temp_file:
+                    temp_file.write(file_content)
+                    temp_file_path = temp_file.name
+
+                try:
+                    # Extract text from the temporary file
+                    document_text = pdf_extractor.extract_text_from_file(
+                        Path(temp_file_path)
                     )
 
-            # Generate document analysis summary
-            analysis_summary = self._generate_document_summary(
-                document_text, document_info
-            )
+                    # Store extracted text for future use
+                    store_document_text(db, document_id, document_text)
 
-            # Generate suggested questions
-            suggested_questions = self._generate_initial_questions(
-                document_text, document_info
-            )
+                    self.logger.info(
+                        f"Successfully extracted {len(document_text)} characters from {document_id}"
+                    )
 
-            return {
-                "success": True,
-                "document_info": {
-                    "id": document_id,
-                    "filename": document_info.get("filename"),
-                    "job_number": job_number,
-                    "document_type": document_info.get("document_type"),
-                    "file_size": document_info.get("file_size_mb", 0),
-                    "pages": self._estimate_pages(document_text),
-                },
-                "document_text": document_text,
-                "analysis_summary": analysis_summary,
-                "suggested_questions": suggested_questions,
-            }
+                finally:
+                    # Clean up temporary file
+                    if os.path.exists(temp_file_path):
+                        os.unlink(temp_file_path)
 
-        except Exception as e:
-            self.logger.error(f"Failed to load document {document_id}: {e}")
-            raise DirectoryAnalyzerException(f"Failed to load document: {str(e)}")
+            except Exception as extraction_error:
+                self.logger.error(
+                    f"Text extraction failed for {document_id}: {extraction_error}"
+                )
+                raise DirectoryAnalyzerException(
+                    f"Could not extract text from document: {document_id}",
+                    details={
+                        "document_id": document_id,
+                        "reason": "Text extraction failed",
+                        "error": str(extraction_error),
+                    },
+                )
+
+        # Generate document analysis summary
+        analysis_summary = self._generate_document_summary(document_text, document_info)
+
+        # Generate suggested questions
+        suggested_questions = self._generate_initial_questions(
+            document_text, document_info
+        )
+
+        return {
+            "success": True,
+            "document_info": {
+                "id": document_id,
+                "filename": document_info.get("filename"),
+                "job_number": job_number,
+                "document_type": document_info.get("document_type"),
+                "file_size": document_info.get("file_size_mb", 0),
+                "pages": self._estimate_pages(document_text),
+            },
+            "document_text": document_text,
+            "analysis_summary": analysis_summary,
+            "suggested_questions": suggested_questions,
+        }
+
+    except Exception as e:
+        self.logger.error(f"Failed to load document {document_id}: {e}")
+        raise DirectoryAnalyzerException(f"Failed to load document: {str(e)}")
 
     async def process_chat_message(
         self,
