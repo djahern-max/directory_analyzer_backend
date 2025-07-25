@@ -19,6 +19,8 @@ from app.services.database_operations import (
     store_chat_message,
     get_chat_history_db,
 )
+import requests
+import json
 
 logger = logging.getLogger("app.services.document_chat")
 
@@ -397,3 +399,261 @@ class DocumentChatService:
                 "confidence": "LOW",
                 "source_sections": [],
             }
+
+    def _make_ai_request(self, prompt: str) -> str:
+        """Make a request to the Anthropic Claude API"""
+        try:
+            # Use the Anthropic API key
+            api_key = self.api_key
+
+            if not api_key:
+                raise Exception("No Anthropic API key configured")
+
+            if not api_key.startswith("sk-ant-"):
+                raise Exception("Invalid Anthropic API key format")
+
+            # Anthropic Claude API endpoint
+            url = "https://api.anthropic.com/v1/messages"
+
+            headers = {
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            }
+
+            # Format the request for Claude
+            data = {
+                "model": "claude-3-sonnet-20240229",
+                "max_tokens": 1000,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+
+            self.logger.info(
+                f"Making Anthropic API request, prompt length: {len(prompt)}"
+            )
+
+            # Make the API request with timeout
+            response = requests.post(url, headers=headers, json=data, timeout=30)
+
+            if response.status_code != 200:
+                self.logger.error(
+                    f"Anthropic API error: {response.status_code} - {response.text}"
+                )
+                raise Exception(f"Anthropic API returned status {response.status_code}")
+
+            # Parse the response
+            response_data = response.json()
+
+            if "content" in response_data and len(response_data["content"]) > 0:
+                ai_response = response_data["content"][0]["text"]
+                self.logger.info(
+                    f"Anthropic API success, response length: {len(ai_response)}"
+                )
+                return ai_response
+            else:
+                raise Exception("Anthropic API returned invalid response format")
+
+        except Exception as e:
+            self.logger.error(f"Anthropic API request failed: {e}")
+            raise e
+
+    # REPLACE your existing _generate_document_response method with this AI-only version:
+
+    def _generate_document_response(
+        self,
+        document_text: str,
+        document_info: Dict[str, Any],
+        user_question: str,
+        chat_context: str,
+    ) -> Dict[str, Any]:
+        """Generate AI response based on document content - AI ONLY, no hardcoded responses"""
+        try:
+            filename = (
+                document_info.get("filename", "Unknown") if document_info else "Unknown"
+            )
+
+            # Limit document text for API (max ~6000 characters to stay within token limits)
+            max_text_length = 6000
+            if len(document_text) > max_text_length:
+                document_text = (
+                    document_text[:max_text_length]
+                    + "\n[Document truncated for analysis...]"
+                )
+
+            # Create a focused prompt for Claude
+            prompt = f"""You are an expert construction contract analyst. Answer the user's question based ONLY on the provided contract document.
+
+    DOCUMENT: {filename}
+
+    PREVIOUS CONVERSATION:
+    {chat_context if chat_context.strip() else "This is the start of the conversation."}
+
+    USER QUESTION: {user_question}
+
+    DOCUMENT CONTENT:
+    {document_text}
+
+    INSTRUCTIONS:
+    1. Answer the specific question asked by the user
+    2. Base your answer ONLY on the document content provided above
+    3. Quote specific sections when relevant (use quotes)
+    4. If the requested information isn't in the document, clearly state that
+    5. Be concise but thorough in your response
+    6. Use bullet points or numbered lists when appropriate for clarity
+
+    Please provide a specific, accurate answer to the user's question about this document."""
+
+            # Make the AI request (no fallbacks - fail transparently if AI doesn't work)
+            ai_response = self._make_ai_request(prompt)
+
+            # Assess confidence based on response content
+            confidence = self._assess_response_confidence(ai_response, user_question)
+
+            return {
+                "content": ai_response,
+                "confidence": confidence,
+                "source_sections": [f"Document: {filename}"],
+            }
+
+        except Exception as e:
+            self.logger.error(f"Failed to generate AI response: {e}")
+
+            # NO hardcoded fallbacks - return a transparent error message
+            error_message = "I'm unable to analyze the document right now due to an AI service issue. "
+
+            if "API key" in str(e):
+                error_message += (
+                    "The AI service is not properly configured. Please contact support."
+                )
+            elif "timeout" in str(e).lower():
+                error_message += (
+                    "The AI service is taking too long to respond. Please try again."
+                )
+            elif "status" in str(e):
+                error_message += "The AI service is temporarily unavailable. Please try again shortly."
+            else:
+                error_message += (
+                    "Please try again, and if the problem persists, contact support."
+                )
+
+            return {
+                "content": error_message,
+                "confidence": "LOW",
+                "source_sections": [],
+            }
+
+    # Also update the _assess_response_confidence method to be more sophisticated:
+
+    def _assess_response_confidence(self, response: str, question: str) -> str:
+        """Assess confidence level of the AI response"""
+        response_lower = response.lower()
+
+        # High confidence indicators
+        high_confidence_indicators = [
+            "according to the document",
+            "the document states",
+            "specifically mentions",
+            "clearly outlined",
+            "as shown in",
+            "the contract specifies",
+        ]
+
+        # Low confidence indicators
+        low_confidence_indicators = [
+            "i don't see",
+            "not mentioned",
+            "doesn't appear",
+            "unclear",
+            "not specified",
+            "not found",
+            "unable to determine",
+            "not clearly stated",
+            "doesn't contain",
+            "not available in",
+        ]
+
+        # Count indicators
+        high_count = sum(
+            1 for indicator in high_confidence_indicators if indicator in response_lower
+        )
+        low_count = sum(
+            1 for indicator in low_confidence_indicators if indicator in response_lower
+        )
+
+        # Determine confidence
+        if low_count > 0:
+            return "LOW"
+        elif high_count >= 2 or (high_count >= 1 and len(response) > 200):
+            return "HIGH"
+        elif len(response) > 150 and '"' in response:  # Contains quotes from document
+            return "HIGH"
+        else:
+            return "MEDIUM"
+
+    # Also update _generate_initial_questions to be AI-driven (optional):
+
+    def _generate_initial_questions(
+        self, document_text: str, document_info: Dict[str, Any]
+    ) -> List[str]:
+        """Generate initial suggested questions based on document content using AI"""
+        try:
+            filename = document_info.get("filename", "Unknown")
+
+            # Use first 2000 characters for question generation
+            text_sample = document_text[:2000]
+
+            prompt = f"""Based on this construction contract document, suggest 5 relevant questions that a user might want to ask.
+
+    DOCUMENT: {filename}
+    DOCUMENT SAMPLE: {text_sample}
+
+    Generate practical, specific questions that would help someone understand:
+    - Key contractual terms and obligations
+    - Important dates and deadlines
+    - Financial aspects and payment terms
+    - Scope of work and deliverables
+    - Parties involved and their responsibilities
+
+    Return ONLY a numbered list of 5 questions, no other text."""
+
+            try:
+                response = self._make_ai_request(prompt)
+                questions = self._parse_suggested_questions(response)
+                return questions[:5] if questions else self._get_default_questions()
+            except Exception as e:
+                self.logger.warning(f"AI question generation failed: {e}")
+                return self._get_default_questions()
+
+        except Exception as e:
+            self.logger.error(f"Failed to generate suggested questions: {e}")
+            return self._get_default_questions()
+
+    def _get_default_questions(self) -> List[str]:
+        """Get default questions when AI generation fails"""
+        return [
+            "What is this document about?",
+            "Who are the parties involved in this contract?",
+            "What are the key terms and conditions?",
+            "What are the important dates and deadlines?",
+            "What is the scope of work or project described?",
+        ]
+
+    def _parse_suggested_questions(self, response: str) -> List[str]:
+        """Parse AI response to extract suggested questions"""
+        lines = response.strip().split("\n")
+        questions = []
+
+        for line in lines:
+            line = line.strip()
+            if line and (
+                line[0].isdigit() or line.startswith("-") or line.startswith("•")
+            ):
+                # Remove numbering and clean up
+                import re
+
+                question = re.sub(r"^\d+\.?\s*", "", line)
+                question = re.sub(r"^[-•]\s*", "", question)
+                if question.strip() and question.strip().endswith("?"):
+                    questions.append(question.strip())
+
+        return questions
