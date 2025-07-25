@@ -1,13 +1,12 @@
-# app/services/database_operations.py
+# app/services/database_operations.py - FIXED VERSION TO WORK WITH SPACES
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, desc
+from sqlalchemy import and_, desc, or_
 import logging
 from uuid import UUID
 
 from app.models.database import User, Job, Contract, TextExtraction, ChatMessage
 from app.core.database import get_db
-from app.services.spaces_storage import get_spaces_storage
 
 logger = logging.getLogger("app.services.database_operations")
 
@@ -15,29 +14,85 @@ logger = logging.getLogger("app.services.database_operations")
 def get_job_documents(db: Session, job_number: str, document_id: str) -> Optional[Dict]:
     """Get document info from Digital Ocean Spaces (since DB is empty)"""
     try:
-        # If document_id is a full Spaces path, extract user_id and find the document
+        # If document_id is a full Spaces path, extract user_id
         if document_id.startswith("users/") and "/" in document_id:
             path_parts = document_id.split("/")
             user_id = path_parts[1]
 
             # Get contracts from Spaces
+            from app.services.spaces_storage import get_spaces_storage
+
             storage = get_spaces_storage()
             contracts = storage.list_job_contracts(user_id, job_number)
 
             # Find the matching document
             for contract in contracts:
                 if contract["file_key"] == document_id:
+                    # Extract filename from the full path
+                    filename = contract.get("original_filename")
+                    if not filename and "/" in document_id:
+                        # Extract from the path if metadata is missing
+                        filename = document_id.split("/")[-1]
+                        # Remove timestamp prefix if present
+                        import re
+
+                        if re.match(r"^\d{8}_\d{6}_[a-f0-9]+_", filename):
+                            filename = re.sub(r"^\d{8}_\d{6}_[a-f0-9]+_", "", filename)
+
                     return {
                         "id": document_id,
-                        "filename": contract.get(
-                            "original_filename", document_id.split("/")[-1]
-                        ),
+                        "filename": filename,
                         "file_path": contract["file_key"],  # This is the Spaces path
                         "document_type": contract.get("contract_type", "UNKNOWN"),
                         "file_size_mb": contract.get("size", 0) / (1024 * 1024),
                         "job_number": job_number,
                         "public_url": contract.get("public_url"),
+                        "is_main_contract": contract.get("is_main_contract", False),
+                        "upload_timestamp": contract.get("upload_timestamp"),
                     }
+
+        # Fallback: try database lookup (in case some contracts are in DB)
+        contract = (
+            db.query(Contract)
+            .join(Job)
+            .filter(
+                and_(
+                    Job.job_number == job_number,
+                    Contract.original_filename == document_id,
+                )
+            )
+            .first()
+        )
+
+        if not contract:
+            # Try by contract ID if it's a UUID
+            try:
+                contract_uuid = UUID(document_id)
+                contract = (
+                    db.query(Contract)
+                    .join(Job)
+                    .filter(
+                        and_(Job.job_number == job_number, Contract.id == contract_uuid)
+                    )
+                    .first()
+                )
+            except ValueError:
+                pass
+
+        if contract:
+            return {
+                "id": str(contract.id),
+                "filename": contract.original_filename,
+                "file_path": contract.file_key,  # Storage key
+                "document_type": (
+                    contract.contract_type.value
+                    if contract.contract_type
+                    else "UNKNOWN"
+                ),
+                "file_size_mb": contract.file_size_bytes / (1024 * 1024),
+                "job_number": job_number,
+                "job_id": str(contract.job_id),
+            }
 
         logger.warning(f"Document {document_id} not found for job {job_number}")
         return None
@@ -54,6 +109,12 @@ def get_document_text(db: Session, document_id: str) -> Optional[str]:
         contract = (
             db.query(Contract).filter(Contract.original_filename == document_id).first()
         )
+
+        if not contract:
+            # Try by file_key (for Spaces documents)
+            contract = (
+                db.query(Contract).filter(Contract.file_key == document_id).first()
+            )
 
         if not contract:
             # Try by UUID
@@ -85,10 +146,16 @@ def get_document_text(db: Session, document_id: str) -> Optional[str]:
 def store_document_text(db: Session, document_id: str, text: str):
     """Store extracted document text using existing TextExtraction model"""
     try:
-        # Find contract
+        # Find contract by various methods
         contract = (
             db.query(Contract).filter(Contract.original_filename == document_id).first()
         )
+
+        if not contract:
+            # Try by file_key (for Spaces documents)
+            contract = (
+                db.query(Contract).filter(Contract.file_key == document_id).first()
+            )
 
         if not contract:
             try:
@@ -97,7 +164,12 @@ def store_document_text(db: Session, document_id: str, text: str):
                     db.query(Contract).filter(Contract.id == contract_uuid).first()
                 )
             except ValueError:
-                logger.error(f"Could not find contract for document_id: {document_id}")
+                logger.warning(
+                    f"Could not find contract for document_id: {document_id}"
+                )
+                # For Spaces documents, we might not have a database record yet
+                # In this case, we can't store the text in the database
+                # But we can still cache it in memory (handled by the service)
                 return
 
         if contract:
@@ -126,6 +198,7 @@ def store_document_text(db: Session, document_id: str, text: str):
                 db.add(text_extraction)
 
             db.commit()
+            logger.info(f"Stored text extraction for document: {document_id}")
 
     except Exception as e:
         logger.error(f"Error storing document text: {e}")
@@ -137,10 +210,19 @@ def store_chat_message(
 ):
     """Store chat message using ChatMessage model"""
     try:
-        # Find contract for context
+        # Find contract for context (try multiple methods)
+        contract = None
+
+        # Try by original filename
         contract = (
             db.query(Contract).filter(Contract.original_filename == document_id).first()
         )
+
+        if not contract:
+            # Try by file_key (for Spaces documents)
+            contract = (
+                db.query(Contract).filter(Contract.file_key == document_id).first()
+            )
 
         if not contract:
             try:
@@ -151,66 +233,63 @@ def store_chat_message(
             except ValueError:
                 pass
 
-        # Create chat message
+        # Create chat message (with or without contract_id)
         chat_message = ChatMessage(
             user_id=UUID(user_id),
             contract_id=contract.id if contract else None,
             role=role,
             content=content,
-            document_filename=contract.original_filename if contract else document_id,
-            job_number=contract.job.job_number if contract and contract.job else None,
+            document_filename=document_id,  # Store the document path for reference
+            job_number=None,  # Could extract from document_id if needed
+            confidence=None,
         )
 
         db.add(chat_message)
         db.commit()
+
+        logger.info(f"Stored chat message for document: {document_id}")
 
     except Exception as e:
         logger.error(f"Error storing chat message: {e}")
         db.rollback()
 
 
-def get_chat_history_db(db: Session, user_id: str, document_id: str) -> List[Dict]:
-    """Get chat history using ChatMessage model"""
+def get_chat_history_db(
+    db: Session, document_id: str, user_id: str
+) -> List[Dict[str, Any]]:
+    """Get chat history for a document"""
     try:
-        # Find contract
-        contract = (
-            db.query(Contract).filter(Contract.original_filename == document_id).first()
+        # Find by document filename or contract ID
+        messages = (
+            db.query(ChatMessage)
+            .filter(
+                and_(
+                    ChatMessage.user_id == UUID(user_id),
+                    or_(
+                        ChatMessage.document_filename == document_id,
+                        ChatMessage.contract_id.in_(
+                            db.query(Contract.id).filter(
+                                or_(
+                                    Contract.original_filename == document_id,
+                                    Contract.file_key == document_id,
+                                )
+                            )
+                        ),
+                    ),
+                )
+            )
+            .order_by(ChatMessage.created_at)
+            .all()
         )
 
-        if not contract:
-            try:
-                contract_uuid = UUID(document_id)
-                contract = (
-                    db.query(Contract).filter(Contract.id == contract_uuid).first()
-                )
-            except ValueError:
-                return []
-
-        if contract:
-            messages = (
-                db.query(ChatMessage)
-                .filter(
-                    and_(
-                        ChatMessage.user_id == UUID(user_id),
-                        ChatMessage.contract_id == contract.id,
-                    )
-                )
-                .order_by(ChatMessage.created_at)
-                .all()
-            )
-
-            return [
-                {
-                    "id": str(msg.id),
-                    "role": msg.role,
-                    "content": msg.content,
-                    "timestamp": msg.created_at.isoformat(),
-                    "confidence": msg.confidence,
-                }
-                for msg in messages
-            ]
-
-        return []
+        return [
+            {
+                "role": msg.role,
+                "content": msg.content,
+                "timestamp": msg.created_at.isoformat() if msg.created_at else None,
+            }
+            for msg in messages
+        ]
 
     except Exception as e:
         logger.error(f"Error getting chat history: {e}")
