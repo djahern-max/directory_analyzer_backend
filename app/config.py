@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     runpod_api_key: str = ""
 
     # Anthropic API settings
-    anthropic_model: str = "claude-3-sonnet-20240229"
+    anthropic_model: str = "claude-3-5-sonnet-20241022"
     anthropic_max_tokens: int = 300
     anthropic_timeout: int = 60
     anthropic_max_retries: int = 3
