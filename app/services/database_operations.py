@@ -7,54 +7,39 @@ from uuid import UUID
 
 from app.models.database import User, Job, Contract, TextExtraction, ChatMessage
 from app.core.database import get_db
+from app.services.spaces_storage import get_spaces_storage
 
 logger = logging.getLogger("app.services.database_operations")
 
 
-def get_job_documents(db: Session, job_number: str, document_id: str) -> Optional[Dict]:
-    """Get document info from database using existing models"""
+def get_job_documents(
+    db: Session, job_number: str, document_id: str, user_id: str = None
+) -> Optional[Dict]:
+    """Get document info from Digital Ocean Spaces (since DB is empty)"""
     try:
-        # Convert document_id to contract filename for lookup
-        contract = (
-            db.query(Contract)
-            .join(Job)
-            .filter(
-                and_(
-                    Job.job_number == job_number,
-                    Contract.original_filename == document_id,
-                )
-            )
-            .first()
-        )
+        # If document_id is a full Spaces path, extract user_id
+        if document_id.startswith("users/") and "/" in document_id:
+            path_parts = document_id.split("/")
+            extracted_user_id = path_parts[1]
 
-        if not contract:
-            # Try by contract ID if it's a UUID
-            try:
-                contract_uuid = UUID(document_id)
-                contract = (
-                    db.query(Contract)
-                    .join(Job)
-                    .filter(
-                        and_(Job.job_number == job_number, Contract.id == contract_uuid)
-                    )
-                    .first()
-                )
-            except ValueError:
-                pass
+            # Get contracts from Spaces
+            storage = get_spaces_storage()
+            contracts = storage.list_job_contracts(extracted_user_id, job_number)
 
-        if contract:
-            return {
-                "id": str(contract.id),
-                "filename": contract.original_filename,
-                "file_path": contract.file_key,  # Storage key
-                "document_type": (
-                    contract.contract_type.value
-                    if contract.contract_type
-                    else "UNKNOWN"
-                ),
-                "file_size_mb": contract.file_size_bytes / (1024 * 1024),
-                "job_id": str(contract.job_id),
-            }
+            # Find the matching document
+            for contract in contracts:
+                if contract["file_key"] == document_id:
+                    return {
+                        "id": document_id,
+                        "filename": contract.get(
+                            "original_filename", document_id.split("/")[-1]
+                        ),
+                        "file_path": contract["file_key"],
+                        "document_type": contract.get("contract_type", "UNKNOWN"),
+                        "file_size_mb": contract.get("size", 0) / (1024 * 1024),
+                        "job_number": job_number,
+                        "public_url": contract.get("public_url"),
+                    }
 
         return None
 
