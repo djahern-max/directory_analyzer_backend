@@ -297,15 +297,37 @@ class DocumentChatService:
     def _build_chat_context(self, chat_history: List[Dict]) -> str:
         """Build context string from chat history"""
         if not chat_history:
-            return ""
+            return "This is the start of the conversation."
 
-        context_parts = []
-        for message in chat_history[-5:]:  # Last 5 messages for context
-            role = message.get("role", "unknown")
-            content = message.get("content", "")
-            context_parts.append(f"{role}: {content}")
+        context_lines = []
+        for msg in chat_history[-6:]:  # Last 6 messages for context
+            try:
+                # Handle both dictionary and Pydantic model objects
+                if hasattr(msg, "dict"):
+                    # Pydantic model - convert to dict
+                    msg_dict = msg.dict()
+                    role = msg_dict.get("role", "unknown")
+                    content = msg_dict.get("content", "")
+                elif hasattr(msg, "role") and hasattr(msg, "content"):
+                    # Object with attributes
+                    role = getattr(msg, "role", "unknown")
+                    content = getattr(msg, "content", "")
+                elif isinstance(msg, dict):
+                    # Regular dictionary
+                    role = msg.get("role", "unknown")
+                    content = msg.get("content", "")
+                else:
+                    # Fallback - try to convert to string
+                    self.logger.warning(f"Unexpected message type: {type(msg)}")
+                    continue
 
-        return "\n".join(context_parts)
+                context_lines.append(f"{role.upper()}: {content}")
+
+            except Exception as e:
+                self.logger.warning(f"Error processing chat message in context: {e}")
+                continue
+
+        return "\n".join(context_lines)
 
     def _generate_document_response(
         self,
