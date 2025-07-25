@@ -43,7 +43,7 @@ def create_application() -> FastAPI:
     app.include_router(directories_router, prefix="/directories", tags=["directories"])
     app.include_router(auth.router, prefix="/auth", tags=["authentication"])
     app.include_router(payments.router, prefix="/payments", tags=["payments"])
-    app.include_router(document_chat.router, prefix="/api")
+    app.include_router(document_chat.router)
 
     return app
 
