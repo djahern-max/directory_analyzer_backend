@@ -204,19 +204,35 @@ class DocumentChatService:
             raise DirectoryAnalyzerException(f"Chat processing failed: {str(e)}")
 
     async def get_chat_history(
-        self, db: Session, job_number: str, document_id: str, user_id: str
+        self,
+        db: Session,
+        job_number: str,
+        document_id: str,
+        user_id: str,
+        hours_back: int = 24,
     ) -> List[Dict[str, Any]]:
-        """Get chat history for a document"""
+        """Get chat history for a document within the specified time window"""
         try:
-            history = get_chat_history_db(db, document_id, user_id)
-            return [
-                {
-                    "role": msg["role"],
-                    "content": msg["content"],
-                    "timestamp": msg["timestamp"],
-                }
-                for msg in history
-            ]
+            history = get_chat_history_db(db, document_id, user_id, hours_back)
+
+            # Add some metadata about the session
+            if history:
+                session_start = min(
+                    msg["timestamp"] for msg in history if msg["timestamp"]
+                )
+                session_duration = max(
+                    msg["session_age_hours"]
+                    for msg in history
+                    if msg["session_age_hours"]
+                )
+
+                self.logger.info(
+                    f"Retrieved {len(history)} messages for {document_id} "
+                    f"(session started {session_duration:.1f} hours ago)"
+                )
+
+            return history
+
         except Exception as e:
             self.logger.error(f"Failed to get chat history: {e}")
             return []

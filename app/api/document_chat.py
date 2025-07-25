@@ -61,6 +61,14 @@ class DocumentLoadResponse(BaseModel):
     )
 
 
+class DocumentChatHistoryRequest(BaseModel):
+    job_number: str = Field(..., description="Job number")
+    document_id: str = Field(..., description="Document identifier or filename")
+    hours_back: Optional[int] = Field(
+        24, description="Number of hours back to retrieve messages (default: 24)"
+    )
+
+
 @router.post("/load", response_model=DocumentLoadResponse)
 async def load_document(
     request: DocumentLoadRequest,
@@ -146,6 +154,51 @@ async def get_chat_history(
             "chat_history": history,
             "document_id": document_id,
             "job_number": job_number,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get chat history: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get chat history: {str(e)}"
+        )
+
+
+@router.post("/chat-history")
+async def get_chat_history_post(
+    request: DocumentChatHistoryRequest,
+    user: dict = Depends(verify_premium_subscription),
+    db: Session = Depends(get_db),
+    api_key: str = Depends(get_api_key),
+):
+    """Get chat history for a specific document with configurable time window (POST method to avoid URL encoding issues)"""
+    try:
+        chat_service = DocumentChatService(api_key)
+
+        # Validate hours_back parameter
+        hours_back = max(
+            1, min(request.hours_back or 24, 168)
+        )  # Between 1 hour and 1 week
+
+        history = await chat_service.get_chat_history(
+            db=db,
+            job_number=request.job_number,
+            document_id=request.document_id,
+            user_id=user["id"],
+            hours_back=hours_back,
+        )
+
+        return {
+            "success": True,
+            "chat_history": history,
+            "document_id": request.document_id,
+            "job_number": request.job_number,
+            "time_window_hours": hours_back,
+            "message_count": len(history),
+            "oldest_message_age_hours": (
+                max((msg.get("session_age_hours", 0) for msg in history), default=0)
+                if history
+                else 0
+            ),
         }
 
     except Exception as e:

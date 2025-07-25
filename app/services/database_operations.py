@@ -255,11 +255,16 @@ def store_chat_message(
 
 
 def get_chat_history_db(
-    db: Session, document_id: str, user_id: str
+    db: Session, document_id: str, user_id: str, hours_back: int = 24
 ) -> List[Dict[str, Any]]:
-    """Get chat history for a document"""
+    """Get chat history for a document within the specified time window"""
     try:
-        # Find by document filename or contract ID
+        from datetime import datetime, timedelta
+
+        # Calculate the cutoff time (24 hours ago by default)
+        cutoff_time = datetime.utcnow() - timedelta(hours=hours_back)
+
+        # Find by document filename or contract ID with time filter
         messages = (
             db.query(ChatMessage)
             .filter(
@@ -276,6 +281,8 @@ def get_chat_history_db(
                             )
                         ),
                     ),
+                    ChatMessage.created_at
+                    >= cutoff_time,  # Only messages from last 24 hours
                 )
             )
             .order_by(ChatMessage.created_at)
@@ -287,6 +294,13 @@ def get_chat_history_db(
                 "role": msg.role,
                 "content": msg.content,
                 "timestamp": msg.created_at.isoformat() if msg.created_at else None,
+                "session_age_hours": (
+                    round(
+                        (datetime.utcnow() - msg.created_at).total_seconds() / 3600, 1
+                    )
+                    if msg.created_at
+                    else None
+                ),
             }
             for msg in messages
         ]
